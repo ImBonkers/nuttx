@@ -202,6 +202,7 @@ void __start(void)
   stm32_pwr_enablevddio();
   stm32_lowsetup();
   stm32_gpioinit();
+  __asm volatile ("dsb sy");  /* Flush write buffer — catch deferred bus faults here */
   showprogress('A');
 
 #ifdef CONFIG_ARMV8M_STACKCHECK
@@ -217,11 +218,13 @@ void __start(void)
 #ifdef USE_EARLYSERIALINIT
   arm_earlyserialinit();
 #endif
+  __asm volatile ("dsb sy");  /* Flush write buffer */
   showprogress('B');
 
   /* Initialize onboard resources */
 
   stm32_board_initialize();
+  __asm volatile ("dsb sy");  /* Flush write buffer */
   showprogress('C');
 
   /* Clear any sticky fault flags from early boot before entering NuttX.
@@ -231,11 +234,19 @@ void __start(void)
   putreg32(0xffffffff, 0xe000ed28);  /* Clear CFSR */
   putreg32(0xffffffff, 0xe000ed2c);  /* Clear HFSR */
 
-  /* Enable BusFault, MemManage, and UsageFault handlers separately so
-   * they don't escalate to HardFault.  This gives better diagnostics.
+  /* NOTE: Do NOT enable BusFault/MemFault/UsageFault handlers here.
+   * The irq_attach() calls that register the actual fault handlers happen
+   * inside nx_start() -> up_irqinitialize().  If we enable fault handlers
+   * in SHCSR before the vectors are attached, any fault during early
+   * nx_start() will hit an unattached vector and panic as "unexpected IRQ"
+   * instead of giving a proper fault dump.  Let up_irqinitialize() handle
+   * SHCSR setup.
    */
 
-  putreg32(getreg32(0xe000ed24) | (7 << 16), 0xe000ed24);  /* SHCSR */
+  /* Final DSB + ISB to flush any deferred writes before entering NuttX */
+
+  __asm volatile ("dsb sy");
+  __asm volatile ("isb sy");
 
   /* Then start NuttX */
 

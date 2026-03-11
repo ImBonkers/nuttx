@@ -87,6 +87,10 @@ void up_allocate_heap(void **heap_start, size_t *heap_size)
 {
   /* Start the heap after the idle thread stack */
 
+  arm_lowputc('H');  /* Debug: entering heap allocation */
+
   *heap_start = (void *)g_idle_topstack;
   *heap_size  = STM32_SRAM_END - g_idle_topstack;
+
+  arm_lowputc('h');  /* Debug: heap allocation done */
 }

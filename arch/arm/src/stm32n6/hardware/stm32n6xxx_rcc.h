@@ -99,6 +99,10 @@
 #define STM32_RCC_MISCENR_OFFSET      0x0248  /* Miscellaneous enable register */
 #define STM32_RCC_MEMENR_OFFSET       0x024c  /* Embedded memories enable register */
 
+/* Embedded memories enable SET register (write-1-to-set, at MEMENR + 0x800) */
+
+#define STM32_RCC_MEMENSR_OFFSET      0x0a4c  /* Embedded memories enable SET register */
+
 /* Clock enable registers (read/write) */
 
 #define STM32_RCC_AHB1ENR_OFFSET      0x0250  /* AHB1 peripheral clock enable register */
@@ -196,6 +200,9 @@
 #define STM32_RCC_IC18CFGR    (STM32_RCC_BASE + STM32_RCC_IC18CFGR_OFFSET)
 #define STM32_RCC_IC19CFGR    (STM32_RCC_BASE + STM32_RCC_IC19CFGR_OFFSET)
 #define STM32_RCC_IC20CFGR    (STM32_RCC_BASE + STM32_RCC_IC20CFGR_OFFSET)
+
+#define STM32_RCC_MEMENR      (STM32_RCC_BASE + STM32_RCC_MEMENR_OFFSET)
+#define STM32_RCC_MEMENSR     (STM32_RCC_BASE + STM32_RCC_MEMENSR_OFFSET)
 
 #define STM32_RCC_AHB1ENR     (STM32_RCC_BASE + STM32_RCC_AHB1ENR_OFFSET)
 #define STM32_RCC_AHB2ENR     (STM32_RCC_BASE + STM32_RCC_AHB2ENR_OFFSET)
@@ -358,5 +365,27 @@
 /* APB5 Peripheral Clock Enable Register (RCC_APB5ENR) */
 
 #define RCC_APB5ENR_RTCEN         (1 << 0)   /* Bit 0:  RTC clock enable */
+
+/* Embedded Memories Enable Register (RCC_MEMENR) */
+
+#define RCC_MEMENR_AXISRAM3EN     (1 << 0)   /* Bit 0:  AXISRAM3 clock enable */
+#define RCC_MEMENR_AXISRAM4EN     (1 << 1)   /* Bit 1:  AXISRAM4 clock enable */
+#define RCC_MEMENR_AXISRAM5EN     (1 << 2)   /* Bit 2:  AXISRAM5 clock enable */
+#define RCC_MEMENR_AXISRAM6EN     (1 << 3)   /* Bit 3:  AXISRAM6 clock enable */
+#define RCC_MEMENR_AHBSRAM1EN     (1 << 4)   /* Bit 4:  AHBSRAM1 clock enable */
+#define RCC_MEMENR_AHBSRAM2EN     (1 << 5)   /* Bit 5:  AHBSRAM2 clock enable */
+#define RCC_MEMENR_BKPSRAMEN      (1 << 6)   /* Bit 6:  Backup SRAM clock enable */
+#define RCC_MEMENR_AXISRAM1EN     (1 << 7)   /* Bit 7:  AXISRAM1 clock enable */
+#define RCC_MEMENR_AXISRAM2EN     (1 << 8)   /* Bit 8:  AXISRAM2 clock enable */
+#define RCC_MEMENR_FLEXRAMEN      (1 << 9)   /* Bit 9:  FLEXRAM clock enable */
+#define RCC_MEMENR_CACHEAXIRAMEN  (1 << 10)  /* Bit 10: CACHEAXIRAM clock enable */
+#define RCC_MEMENR_VENCRAMEN      (1 << 11)  /* Bit 11: VENCRAM clock enable */
+#define RCC_MEMENR_BOOTROMEN      (1 << 12)  /* Bit 12: Boot ROM clock enable */
+
+/* All AXISRAM banks (1-6) */
+
+#define RCC_MEMENR_ALLAXISRAM     (RCC_MEMENR_AXISRAM1EN | RCC_MEMENR_AXISRAM2EN | \
+                                   RCC_MEMENR_AXISRAM3EN | RCC_MEMENR_AXISRAM4EN | \
+                                   RCC_MEMENR_AXISRAM5EN | RCC_MEMENR_AXISRAM6EN)
 
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_RCC_H */

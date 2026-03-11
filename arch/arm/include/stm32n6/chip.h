@@ -33,11 +33,25 @@
  * Pre-processor Prototypes
  ****************************************************************************/
 
-/* Memory sizes - STM32N6 has one unified SRAM (4.2MB) and no internal
- * flash.  Code must be loaded from external XSPI flash or SRAM.
+/* Memory sizes - STM32N6 has no internal flash.  Code must be loaded
+ * from external XSPI flash or SRAM.
+ *
+ * AXI SRAM layout (from CMSIS stm32n657xx.h):
+ *   AXISRAM1:     0x34000000  1 MB
+ *   AXISRAM2:     0x34100000  1 MB
+ *   AXISRAM3:     0x34200000  448 KB
+ *   AXISRAM4:     0x34270000  448 KB
+ *   AXISRAM5:     0x342E0000  448 KB
+ *   AXISRAM6:     0x34350000  448 KB
+ *   CACHEAXIRAM:  0x343C0000  256 KB  (NPU cache, usable as general SRAM)
+ *   -------------------------------------------
+ *   Total:                    4 MB    (end = 0x34400000)
+ *
+ * VENCRAM (128 KB at 0x34400000) is excluded — reserved for video encoder.
+ * Each bank requires its RCC MEMENR clock enable bit to be set.
  */
 
-#define STM32N6_SRAM_SIZE         (4 * 1024 * 1024 + 192 * 1024) /* 4390912 bytes (4.2MB) */
+#define STM32N6_SRAM_SIZE         (4 * 1024 * 1024)  /* 4194304 bytes (4 MiB) */
 
 #define STM32N6_NATIM                    (2)   /* Two advanced timers TIM1 and TIM8 */
 #define STM32N6_NGTIM32                  (2)   /* 32-bit general timers TIM2 and TIM5 with DMA */

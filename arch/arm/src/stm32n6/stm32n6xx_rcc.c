@@ -145,6 +145,16 @@ static inline void rcc_enableapb2(void)
 
 void stm32_rcc_enableperipherals(void)
 {
+  /* Enable all AXISRAM bank clocks.  The boot ROM only enables AXISRAM1/2
+   * which is sufficient for code execution, but the NuttX heap extends
+   * across all SRAM banks (up to AXISRAM5 at 0x34400000+).  Without these
+   * clocks, mm_initialize writing the tail node at the heap end will cause
+   * an IMPRECISERR bus fault.
+   */
+
+  putreg32(RCC_MEMENR_ALLAXISRAM | RCC_MEMENR_CACHEAXIRAMEN,
+           STM32_RCC_MEMENSR);
+
   rcc_enableahb4();
   rcc_enableapb1();
   rcc_enableapb2();
