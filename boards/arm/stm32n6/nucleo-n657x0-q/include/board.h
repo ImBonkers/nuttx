@@ -1,0 +1,146 @@
+/****************************************************************************
+ * boards/arm/stm32n6/nucleo-n657x0-q/include/board.h
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.  The
+ * ASF licenses this file to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance with the
+ * License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+ * License for the specific language governing permissions and limitations
+ * under the License.
+ *
+ ****************************************************************************/
+
+#ifndef __BOARDS_ARM_STM32N6_NUCLEO_N657X0_Q_INCLUDE_BOARD_H
+#define __BOARDS_ARM_STM32N6_NUCLEO_N657X0_Q_INCLUDE_BOARD_H
+
+/****************************************************************************
+ * Included Files
+ ****************************************************************************/
+
+#include <nuttx/config.h>
+#ifndef __ASSEMBLY__
+#  include <stdint.h>
+#endif
+
+/****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* Clocking *****************************************************************/
+
+/* The Nucleo-N657X0-Q runs from the internal 64 MHz HSI oscillator for
+ * Phase 1 bringup.  No PLL is configured.  The STM32N6 can run up to
+ * 800 MHz with overdrive, but that requires PLL configuration which will
+ * be added in a later phase.
+ *
+ *   System Clock Source : HSI (64 MHz)
+ *   SYSCLK Freq (MHz)  : 64
+ *   HCLK Freq   (MHz)  : 64
+ */
+
+#define STM32_HSI_FREQUENCY     64000000ul
+#define STM32_SYSCLK_FREQUENCY  64000000ul
+#define STM32_HCLK_FREQUENCY    64000000ul
+#define STM32_PCLK1_FREQUENCY   64000000ul
+#define STM32_PCLK2_FREQUENCY   64000000ul
+
+/* board_loopspermsec: approximate loops per millisecond at 64 MHz */
+
+#define BOARD_LOOPSPERMSEC      8000
+
+/* LED definitions **********************************************************/
+
+/* The Nucleo-N657X0-Q has one user-controllable LED:
+ *
+ *   LED  I/O   Color
+ *   LD1  PG10  Green
+ *
+ * - When the I/O is HIGH, the LED is on.
+ * - When the I/O is LOW, the LED is off.
+ *
+ * Note: The output is initialized SET (off for active-low convention in
+ * NuttX LED driver), but LD1 on this board is active-high.  Board-specific
+ * LED driver code should account for polarity.
+ */
+
+/* LED index values for use with board_userled() */
+
+#define BOARD_LED1        0
+#define BOARD_NLEDS       1
+
+#define BOARD_LED_GREEN   BOARD_LED1
+
+/* LED bits for use with board_userled_all() */
+
+#define BOARD_LED1_BIT    (1 << BOARD_LED1)
+
+/* Button definitions *******************************************************/
+
+/* The Nucleo-N657X0-Q supports one button: Pushbutton B1, labeled "User",
+ * is connected to GPIO PC13.
+ */
+
+#define BUTTON_USER        0
+#define NUM_BUTTONS        1
+#define BUTTON_USER_BIT    (1 << BUTTON_USER)
+
+/* Alternate function pin selections ****************************************/
+
+/* USART1 GPIOs *************************************************************/
+
+/* USART1 (Nucleo Virtual Console): PE5=TX (AF7), PE6=RX (AF7)
+ * Connected to the on-board ST-Link to provide a Virtual COM Port.
+ */
+
+#define GPIO_USART1_TX   GPIO_USART1_TX_1
+#define GPIO_USART1_RX   GPIO_USART1_RX_1
+
+/****************************************************************************
+ * Public Data
+ ****************************************************************************/
+
+#ifndef __ASSEMBLY__
+
+#undef EXTERN
+#if defined(__cplusplus)
+#define EXTERN extern "C"
+extern "C"
+{
+#else
+#define EXTERN extern
+#endif
+
+/****************************************************************************
+ * Public Function Prototypes
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: stm32_board_initialize
+ *
+ * Description:
+ *   All STM32N6 architectures must provide the following entry point.
+ *   This entry point is called early in the initialization -- after all
+ *   memory has been configured and mapped but before any devices
+ *   have been initialized.
+ *
+ ****************************************************************************/
+
+void stm32_board_initialize(void);
+
+#undef EXTERN
+#if defined(__cplusplus)
+}
+#endif
+
+#endif /* __ASSEMBLY__ */
+#endif /* __BOARDS_ARM_STM32N6_NUCLEO_N657X0_Q_INCLUDE_BOARD_H */

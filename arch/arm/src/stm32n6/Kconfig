@@ -1,0 +1,99 @@
+# arch/arm/src/stm32n6/Kconfig
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.  The
+# ASF licenses this file to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance with the
+# License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  See the
+# License for the specific language governing permissions and limitations
+# under the License.
+
+config STM32N6_STM32N6XXXX
+	bool
+	default y
+
+choice
+	prompt "STM32 N6 Chip Selection"
+	default ARCH_CHIP_STM32N657X0
+
+config ARCH_CHIP_STM32N657X0
+	bool "STM32N657X0"
+	select STM32N6_STM32N6XXXX
+
+endchoice
+
+menu "STM32N6 Peripheral Selection"
+
+config STM32N6_USART1
+	bool "USART1"
+	default n
+	select STM32N6_USART
+	select USART1_SERIALDRIVER
+	select STM32N6_USART1_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+
+config STM32N6_USART1_SERIALDRIVER
+	bool
+	default n
+
+config STM32N6_USART2
+	bool "USART2"
+	default n
+	select STM32N6_USART
+	select USART2_SERIALDRIVER
+	select STM32N6_USART2_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+
+config STM32N6_USART2_SERIALDRIVER
+	bool
+	default n
+
+config STM32N6_USART3
+	bool "USART3"
+	default n
+	select STM32N6_USART
+	select USART3_SERIALDRIVER
+	select STM32N6_USART3_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+
+config STM32N6_USART3_SERIALDRIVER
+	bool
+	default n
+
+config STM32N6_UART4
+	bool "UART4"
+	default n
+	select STM32N6_USART
+	select UART4_SERIALDRIVER
+	select STM32N6_UART4_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+
+config STM32N6_UART4_SERIALDRIVER
+	bool
+	default n
+
+config STM32N6_UART5
+	bool "UART5"
+	default n
+	select STM32N6_USART
+	select UART5_SERIALDRIVER
+	select STM32N6_UART5_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+
+config STM32N6_UART5_SERIALDRIVER
+	bool
+	default n
+
+config STM32N6_USART
+	bool
+
+endmenu
