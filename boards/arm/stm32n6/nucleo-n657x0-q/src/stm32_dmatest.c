@@ -106,13 +106,12 @@ int stm32_dmatest(void)
 
   memset(g_dma_dst, 0, sizeof(g_dma_dst));
 
-  /* Disable D-cache before DMA.  This performs a clean+invalidate of
-   * all cache lines via set/way operations (DCCISW), ensuring source
-   * data is written back to SRAM.  MVA-based cache ops (DCCMVAC,
-   * DCIMVAC) require an MPU Write-Back region to function on Cortex-M55.
+  /* Clean source buffer from D-cache to SRAM so DMA reads correct data.
+   * Uses MVA-based DCCMVAC which requires MPU WB region on Cortex-M55.
    */
 
-  up_disable_dcache();
+  up_clean_dcache((uintptr_t)g_dma_src,
+                  (uintptr_t)g_dma_src + DMA_TEST_NBYTES);
 
   /* Allocate a DMA channel for M2M transfer */
 
@@ -168,12 +167,12 @@ int stm32_dmatest(void)
       return -EIO;
     }
 
-  /* Re-enable D-cache.  Since disable cleaned+invalidated all lines,
-   * the cache is cold and CPU reads will fetch fresh SRAM data
-   * written by DMA.
+  /* Invalidate destination buffer in D-cache so CPU reads fresh SRAM
+   * data written by DMA.  Uses MVA-based DCIMVAC.
    */
 
-  up_enable_dcache();
+  up_invalidate_dcache((uintptr_t)g_dma_dst,
+                       (uintptr_t)g_dma_dst + DMA_TEST_NBYTES);
 
   /* Verify the transfer */
 

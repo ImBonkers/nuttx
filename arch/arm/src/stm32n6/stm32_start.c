@@ -38,6 +38,7 @@
 
 #include "stm32.h"
 #include "stm32_gpio.h"
+#include "stm32_mpuinit.h"
 #include "stm32_pwr.h"
 #include "stm32_start.h"
 
@@ -381,6 +382,15 @@ void __start(void)
   stm32_gpioinit();
   __asm volatile ("dsb sy");  /* Flush write buffer — catch deferred bus faults here */
   showprogress('A');
+
+  /* Configure MPU before enabling caches.  The AXI-SRAM region needs
+   * explicit Write-Back attributes so that MVA-based D-cache maintenance
+   * operations (DCCIMVAC, DCIMVAC) work correctly on Cortex-M55.
+   */
+
+#ifdef CONFIG_ARM_MPU
+  stm32_mpuinitialize();
+#endif
 
   /* Enable I-cache and D-cache.  The Cortex-M55 caches dramatically reduce
    * stalls from the 200 MHz AHB bus when running the CPU at 600 MHz.

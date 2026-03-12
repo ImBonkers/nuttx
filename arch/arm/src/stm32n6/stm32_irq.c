@@ -301,7 +301,18 @@ void up_irqinitialize(void)
 
 #ifdef CONFIG_ARM_MPU
   irq_attach(STM32_IRQ_MEMFAULT, arm_memfault, NULL);
-  up_enable_irq(STM32_IRQ_MEMFAULT);
+
+  /* NOTE: Do NOT call up_enable_irq(STM32_IRQ_MEMFAULT) here.
+   * On Cortex-M55 in Secure state, setting MEMFAULTENA in SHCSR causes
+   * D-cache set/way operations (DCCISW) to silently fail, breaking DMA
+   * cache coherency.  MemFault escalates to HardFault when disabled,
+   * which is acceptable — the arm_hardfault handler is always attached.
+   *
+   * Diagnostics are not lost: escalated faults still populate CFSR MMFSR
+   * bits and MMFAR, and arm_hardfault checks HFSR.FORCED to decode them.
+   * The only trade-off is losing independent MemManage priority/preemption,
+   * which is irrelevant since all faults are fatal in this configuration.
+   */
 #endif
 
   /* Attach all other processor exceptions (except reset and sys tick) */
