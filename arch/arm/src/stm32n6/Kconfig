@@ -28,6 +28,8 @@ choice
 config ARCH_CHIP_STM32N657X0
 	bool "STM32N657X0"
 	select STM32N6_STM32N6XXXX
+	select ARMV8M_HAVE_ICACHE
+	select ARMV8M_HAVE_DCACHE
 
 endchoice
 

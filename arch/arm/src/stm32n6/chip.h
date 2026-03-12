@@ -50,8 +50,8 @@
 #define ARMV8M_PERIPHERAL_INTERRUPTS STM32_IRQ_NEXTINTS
 
 /* Cache line sizes for Cortex-M55.
- * The M55 has optional I/D caches.  For Phase 1, we define conservative
- * values but do not enable caches.
+ * The M55 has 32-byte I/D cache lines.  Caches are enabled early in boot
+ * (stm32_start.c) via up_enable_icache() / up_enable_dcache().
  */
 
 #define ARMV8M_ICACHE_LINESIZE 32   /* 32 bytes */

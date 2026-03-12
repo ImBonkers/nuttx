@@ -337,6 +337,19 @@ void __start(void)
   __asm volatile ("dsb sy");  /* Flush write buffer — catch deferred bus faults here */
   showprogress('A');
 
+  /* Enable I-cache and D-cache.  The Cortex-M55 caches dramatically reduce
+   * stalls from the 200 MHz AHB bus when running the CPU at 600 MHz.
+   * Write-through mode is used for D-cache to avoid coherency issues
+   * until DMA cache maintenance is in place.
+   */
+
+#ifdef CONFIG_ARMV8M_ICACHE
+  up_enable_icache();
+#endif
+#ifdef CONFIG_ARMV8M_DCACHE
+  up_enable_dcache();
+#endif
+
   /* Install early fault handler now that UART is configured.  The vector
    * table is in writable SRAM, so we can patch HardFault (index 3) to
    * point at our minimal handler that dumps CFSR/PC via polling UART.
