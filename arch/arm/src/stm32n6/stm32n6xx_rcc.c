@@ -188,6 +188,18 @@ void stm32_stdclockconfig(void)
   volatile int32_t timeout;
   uint32_t regval;
 
+  /* If clocks are already configured (e.g. FSBL set up PLL1 and switched
+   * CPUSW to IC1), skip reconfiguration.  CFGR1 locks after the first
+   * write — a second write crashes the system (SRAM goes offline).
+   */
+
+  regval = getreg32(STM32_RCC_CFGR1);
+  if ((regval & RCC_CFGR1_CPUSWS_MASK) == RCC_CFGR1_CPUSWS_IC1 &&
+      (regval & RCC_CFGR1_SYSSWS_MASK) == RCC_CFGR1_SYSSWS_IC2_IC6_IC11)
+    {
+      return;
+    }
+
   /* 1. Verify HSI is ready (already running from reset) */
 
   for (timeout = HSIRDY_TIMEOUT; timeout > 0; timeout--)

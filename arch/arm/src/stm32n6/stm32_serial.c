@@ -2155,6 +2155,7 @@ void arm_earlyserialinit(void)
 #if CONSOLE_UART > 0
   stm32serial_setup(&g_uart_devs[CONSOLE_UART - 1]->dev);
 #endif
+
 #endif /* HAVE UART */
 }
 #endif /* USE_EARLYSERIALINIT */

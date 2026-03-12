@@ -414,9 +414,17 @@
 #define RCC_DIVENR_IC19EN         (1 << 18)  /* Bit 18: IC19 enable */
 #define RCC_DIVENR_IC20EN         (1 << 19)  /* Bit 19: IC20 enable */
 
+/* AHB1 Peripheral Clock Enable Register (RCC_AHB1ENR) */
+
+#define RCC_AHB1ENR_GPDMA1EN      (1 << 4)   /* Bit 4:  GPDMA1 clock enable */
+
 /* AHB3 Peripheral Clock Enable Register (RCC_AHB3ENR) */
 
 #define RCC_AHB3ENR_RIFSCEN       (1 << 9)   /* Bit 9:  RIFSC clock enable */
+
+/* AHB5 Peripheral Clock Enable Register (RCC_AHB5ENR) */
+
+#define RCC_AHB5ENR_HPDMA1EN      (1 << 0)   /* Bit 0:  HPDMA1 clock enable */
 
 /* RCC_SECCFGR4 - Bus security configuration (bit = 1 means secure-only) */
 

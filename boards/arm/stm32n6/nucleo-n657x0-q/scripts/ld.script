@@ -74,6 +74,7 @@ SECTIONS
     } > sram
     __exidx_end = ABSOLUTE(.);
 
+    . = ALIGN(32);
     _eronly = ABSOLUTE(.);
 
     .data : {

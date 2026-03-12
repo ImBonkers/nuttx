@@ -253,6 +253,14 @@ void __start(void)
 
   putreg32((uint32_t)_vectors, NVIC_VECTAB);
 
+  /* Disable SysTick and clear any pending interrupt.  When booting via
+   * FSBL, HAL_Init() starts SysTick at 1ms.  If it fires before NuttX
+   * has attached its handlers, we get an "unexpected IRQ" assertion.
+   */
+
+  putreg32(0, NVIC_SYSTICK_CTRL);
+  putreg32(NVIC_INTCTRL_PENDSTCLR, NVIC_INTCTRL);
+
   /* Enable FPU (CP10/CP11) immediately.  With hard-float ABI the compiler
    * may emit FPU instructions at any point, and the NVIC will attempt to
    * save FP context on exception entry.  Both require the FPU to be
@@ -282,15 +290,19 @@ void __start(void)
    * give by _sdata and _edata.  The temporary location is in FLASH at the
    * end of all of the other read-only data (.text, .rodata) at _eronly.
    *
-   * In DEV boot mode (running entirely from SRAM), _eronly == _sdata so
-   * this loop body will not execute - the data is already in place.
+   * In SRAM-only builds (DEV mode), _eronly == _sdata so data is already
+   * in place.  Skip the copy to avoid corrupting .data when alignment
+   * padding creates a gap between _eronly and _sdata.
    */
 
-  for (src = (const uint32_t *)_eronly,
-       dest = (uint32_t *)_sdata; dest < (uint32_t *)_edata;
-      )
+  if (_eronly != _sdata)
     {
-      *dest++ = *src++;
+      for (src = (const uint32_t *)_eronly,
+           dest = (uint32_t *)_sdata; dest < (uint32_t *)_edata;
+          )
+        {
+          *dest++ = *src++;
+        }
     }
 
   /* Enable Low-Overhead Branch (LOB) extensions for Cortex-M55 */
@@ -372,8 +384,6 @@ void __start(void)
 
   /* Enable I-cache and D-cache.  The Cortex-M55 caches dramatically reduce
    * stalls from the 200 MHz AHB bus when running the CPU at 600 MHz.
-   * Write-through mode is used for D-cache to avoid coherency issues
-   * until DMA cache maintenance is in place.
    */
 
 #ifdef CONFIG_ARMV8M_ICACHE

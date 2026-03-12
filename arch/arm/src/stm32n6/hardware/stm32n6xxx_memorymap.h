@@ -124,4 +124,12 @@
 #define STM32_PWR_BASE        0x56024800
 #define STM32_RCC_BASE        0x56028000
 
+/* AHB1 peripherals *********************************************************/
+
+#define STM32_GPDMA1_BASE     0x50021000    /* GPDMA1 (AHB1, Secure) */
+
+/* AHB5 peripherals *********************************************************/
+
+#define STM32_HPDMA1_BASE     0x58020000    /* HPDMA1 (AHB5, Secure) */
+
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_MEMORYMAP_H */

@@ -74,6 +74,10 @@ int stm32_bringup(void)
   stm32_gpiowrite(GPIO_LD6, true);
   stm32_gpiowrite(GPIO_LD7, true);
 
+#ifdef CONFIG_STM32N6_DMA
+  stm32_dmatest();
+#endif
+
 #ifdef CONFIG_FS_PROCFS
   /* Mount the procfs file system */
 

@@ -90,5 +90,9 @@
 
 int stm32_bringup(void);
 
+#ifdef CONFIG_STM32N6_DMA
+int stm32_dmatest(void);
+#endif
+
 #endif /* __ASSEMBLY__ */
 #endif /* __BOARDS_ARM_STM32N6_NUCLEO_N657X0_Q_SRC_NUCLEO_N657X0_Q_H */
