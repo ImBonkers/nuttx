@@ -28,10 +28,13 @@
 
 #include <sys/mount.h>
 #include <sys/types.h>
+#include <stdio.h>
 #include <debug.h>
 
 #include <nuttx/board.h>
 
+#include "arm_internal.h"
+#include "stm32_gpio.h"
 #include "nucleo-n657x0-q.h"
 
 #include <arch/board/board.h>
@@ -61,6 +64,15 @@
 int stm32_bringup(void)
 {
   int ret;
+
+  /* Turn on user LEDs: LD6 (green/PG0) and LD7 (blue/PG8) work in DEV mode.
+   * LD5 (red/PG10) does not light in DEV mode despite correct GPIO config
+   * (confirmed: MODER=output, ODR=LOW, IDR=LOW).  Likely ST-LINK V3EC
+   * interference via SWD on PG10 in DEV boot mode.
+   */
+
+  stm32_gpiowrite(GPIO_LD6, true);
+  stm32_gpiowrite(GPIO_LD7, true);
 
 #ifdef CONFIG_FS_PROCFS
   /* Mount the procfs file system */

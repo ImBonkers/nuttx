@@ -61,29 +61,59 @@
 
 /* LED definitions **********************************************************/
 
-/* The Nucleo-N657X0-Q has one user-controllable LED:
+/* The Nucleo-N657X0-Q has three user-controllable LEDs (active-LOW):
  *
  *   LED  I/O   Color
- *   LD1  PG10  Green
+ *   LD5  PG10  Red
+ *   LD6  PG0   Green
+ *   LD7  PG8   Blue
  *
- * - When the I/O is HIGH, the LED is on.
- * - When the I/O is LOW, the LED is off.
- *
- * Note: The output is initialized SET (off for active-low convention in
- * NuttX LED driver), but LD1 on this board is active-high.  Board-specific
- * LED driver code should account for polarity.
+ * - When the I/O is HIGH, the LED is OFF.
+ * - When the I/O is LOW, the LED is ON.
  */
 
 /* LED index values for use with board_userled() */
 
 #define BOARD_LED1        0
-#define BOARD_NLEDS       1
+#define BOARD_LED2        1
+#define BOARD_LED3        2
+#define BOARD_NLEDS       3
 
-#define BOARD_LED_GREEN   BOARD_LED1
+#define BOARD_LED_RED     BOARD_LED1
+#define BOARD_LED_GREEN   BOARD_LED2
+#define BOARD_LED_BLUE    BOARD_LED3
 
 /* LED bits for use with board_userled_all() */
 
 #define BOARD_LED1_BIT    (1 << BOARD_LED1)
+#define BOARD_LED2_BIT    (1 << BOARD_LED2)
+#define BOARD_LED3_BIT    (1 << BOARD_LED3)
+
+/* If CONFIG_ARCH_LEDS is defined, the usage by the board port is defined
+ * in include/board.h and src/stm32_autoleds.c.  The LEDs are used to
+ * encode OS-related events as follows:
+ *
+ *                                     RED   GREEN BLUE
+ *   LED_STARTED            0          OFF   OFF   OFF
+ *   LED_HEAPALLOCATE       1          OFF   OFF   ON
+ *   LED_IRQSENABLED        2          OFF   ON    OFF
+ *   LED_STACKCREATED       3          OFF   ON    ON
+ *   LED_INIRQ              4          GLOW  N/C   N/C
+ *   LED_SIGNAL             5          N/C   GLOW  N/C
+ *   LED_ASSERTION          6          GLOW  N/C   GLOW
+ *   LED_PANIC              7          BLINK OFF   OFF
+ *   LED_IDLE               8          OFF   OFF   OFF
+ */
+
+#define LED_STARTED        0
+#define LED_HEAPALLOCATE   1
+#define LED_IRQSENABLED    2
+#define LED_STACKCREATED   3
+#define LED_INIRQ          4
+#define LED_SIGNAL         5
+#define LED_ASSERTION      6
+#define LED_PANIC          7
+#define LED_IDLE           8
 
 /* Button definitions *******************************************************/
 

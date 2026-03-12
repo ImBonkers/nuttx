@@ -51,6 +51,16 @@ void stm32_early_fault_dump(uint32_t *frame);
  * Pre-processor Definitions
  ****************************************************************************/
 
+/* SYSCFG (Secure alias) - I/O compensation cell registers ******************/
+
+#define STM32_SYSCFG_BASE        0x56008000
+#define STM32_SYSCFG_INITSVTORCR (STM32_SYSCFG_BASE + 0x10)
+#define STM32_SYSCFG_VDDIO4CCCR (STM32_SYSCFG_BASE + 0x44)
+#define STM32_SYSCFG_VDDIO5CCCR (STM32_SYSCFG_BASE + 0x4c)
+#define STM32_SYSCFG_VDDIO2CCCR (STM32_SYSCFG_BASE + 0x54)
+#define STM32_SYSCFG_VDDIO3CCCR (STM32_SYSCFG_BASE + 0x5c)
+#define STM32_SYSCFG_VDDCCCR    (STM32_SYSCFG_BASE + 0x64)
+
 /* STM32N6 Memory Map - DEV boot mode ***************************************/
 
 /* In DEV boot mode, code is loaded directly to SRAM by ST-LINK.
@@ -301,7 +311,7 @@ void __start(void)
    * (APB4ENSR2 at RCC + 0x0A78) to enable it atomically.
    */
 
-  putreg32(0x02, STM32_RCC_BASE + 0x0a78);  /* RCC_APB4ENSR2: BSECEN */
+  putreg32(0x03, STM32_RCC_BASE + 0x0a78);  /* RCC_APB4ENSR2: SYSCFGEN+BSECEN */
 
   /* Enable LPEN (Low-Power Enable) registers so peripheral and memory
    * clocks keep running during CSLEEP (WFI).  Without these, WFI halts
@@ -324,6 +334,29 @@ void __start(void)
   putreg32(0x10, STM32_RCC_BASE + 0x0aac);    /* APB2LPENSR: USART1 */
 
   stm32_pwr_enablevddio();
+
+  /* Configure SYSCFG I/O compensation cells per errata ES0620.
+   * The FSBL's SystemInit() does this for stable I/O drive on all VddIO
+   * domains.  Without this, some GPIO pins (e.g. PG0, PG10) may not
+   * drive correctly.  SYSCFG clock was enabled above (APB4ENSR2 bit 0).
+   *
+   * Value 0x287 matches the FSBL: RANSRC=7, RAPSRC=8, CS=1 (manual codes).
+   * SYSCFG Secure base = 0x56008000 (APB4 + 0x8000).
+   */
+
+  putreg32(0x287, STM32_SYSCFG_VDDIO4CCCR);
+  putreg32(0x287, STM32_SYSCFG_VDDIO5CCCR);
+  putreg32(0x287, STM32_SYSCFG_VDDIO2CCCR);
+  putreg32(0x287, STM32_SYSCFG_VDDIO3CCCR);
+  putreg32(0x287, STM32_SYSCFG_VDDCCCR);
+
+  /* Set INITSVTORCR to our vector table address */
+
+  putreg32((uint32_t)_vectors, STM32_SYSCFG_INITSVTORCR);
+
+  /* Read-back to ensure writes complete before proceeding */
+
+  (void)getreg32(STM32_SYSCFG_VDDCCCR);
 
   /* Set USART1 kernel clock to HSI (64 MHz) so the UART baud rate is
    * independent of SYSSW changes.  RCC_CCIPR13 offset 0x0174,

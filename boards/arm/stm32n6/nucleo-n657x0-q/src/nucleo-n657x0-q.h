@@ -37,21 +37,26 @@
 
 /* NUCLEO-N657X0-Q GPIOs ****************************************************/
 
-/* LED  I/O   Color
- * LD1  PG10  Green
+/* User LEDs (active-LOW: HIGH=OFF, LOW=ON)
  *
- * - When the I/O is HIGH, the LED is on.
- * - When the I/O is LOW, the LED is off.
+ *   LED  I/O   Color
+ *   LD5  PG10  Red
+ *   LD6  PG0   Green
+ *   LD7  PG8   Blue
+ *
+ * Initialized with GPIO_OUTPUT_SET (HIGH = LED OFF).
  */
 
-#define GPIO_LD1        (GPIO_OUTPUT | GPIO_PUSHPULL | GPIO_SPEED_50MHZ | \
+#define GPIO_LD5        (GPIO_OUTPUT | GPIO_PUSHPULL | GPIO_SPEED_2MHZ | \
                          GPIO_OUTPUT_SET | GPIO_PORTG | GPIO_PIN10)
+#define GPIO_LD6        (GPIO_OUTPUT | GPIO_PUSHPULL | GPIO_SPEED_2MHZ | \
+                         GPIO_OUTPUT_SET | GPIO_PORTG | GPIO_PIN0)
+#define GPIO_LD7        (GPIO_OUTPUT | GPIO_PUSHPULL | GPIO_SPEED_2MHZ | \
+                         GPIO_OUTPUT_SET | GPIO_PORTG | GPIO_PIN8)
 
 /* Button definitions *******************************************************/
 
-/* B1 USER: the user button is connected to the I/O PC13 of the STM32
- * microcontroller.
- */
+/* B1 USER: connected to PC13. Active-HIGH (pressed = HIGH). */
 
 #define GPIO_BTN_USER   (GPIO_INPUT | GPIO_FLOAT | GPIO_PORTC | GPIO_PIN13)
 
