@@ -42,27 +42,45 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* The desired timer interrupt frequency is provided by the definition
- * CLK_TCK (see include/time.h).  CLK_TCK defines the desired number of
- * system clock ticks per second.  That value is a user configurable setting
- * that defaults to 100 (100 ticks per second = 10 MS interval).
+/* On the STM32N6 Cortex-M55, WFI halts both the processor clock and the
+ * external reference clock, stopping SysTick regardless of CLKSOURCE.
+ * We use TIM2 (a general-purpose 32-bit timer on APB1) instead, because
+ * the APB1 clock continues running during WFI sleep mode.
  *
- * On the STM32N6 Cortex-M55, WFI halts both the processor clock and
- * the external reference clock, stopping SysTick regardless of CLKSOURCE.
- * WFI is therefore disabled in stm32_idle.c to keep SysTick running.
- * A future improvement is to replace SysTick with a hardware timer (TIM2)
- * that has an independent APB clock surviving WFI.
+ * TIM2 register offsets (standard STM32 general-purpose timer layout):
  */
 
-#define SYSTICK_RELOAD ((STM32_HCLK_FREQUENCY / CLK_TCK) - 1)
+#define STM32_TIM_CR1_OFFSET    0x00
+#define STM32_TIM_DIER_OFFSET   0x0c
+#define STM32_TIM_SR_OFFSET     0x10
+#define STM32_TIM_EGR_OFFSET    0x14
+#define STM32_TIM_CNT_OFFSET    0x24
+#define STM32_TIM_PSC_OFFSET    0x28
+#define STM32_TIM_ARR_OFFSET    0x2c
 
-/* The size of the reload field is 24 bits.  Verify that the reload value
- * will fit in the reload register.
+/* CR1 bits */
+
+#define TIM_CR1_CEN             (1 << 0)  /* Counter enable */
+#define TIM_CR1_ARPE            (1 << 7)  /* Auto-reload preload enable */
+
+/* DIER bits */
+
+#define TIM_DIER_UIE            (1 << 0)  /* Update interrupt enable */
+
+/* SR bits */
+
+#define TIM_SR_UIF              (1 << 0)  /* Update interrupt flag */
+
+/* EGR bits */
+
+#define TIM_EGR_UG              (1 << 0)  /* Update generation */
+
+/* TIM2 auto-reload value for the desired tick rate.
+ * APB1 timer clock = STM32_HCLK_FREQUENCY (no prescaler in Phase 1).
+ * ARR = (timer_clock / CLK_TCK) - 1
  */
 
-#if SYSTICK_RELOAD > 0x00ffffff
-#  error SYSTICK_RELOAD exceeds the range of the RELOAD register
-#endif
+#define TIM2_RELOAD ((STM32_HCLK_FREQUENCY / CLK_TCK) - 1)
 
 /****************************************************************************
  * Private Functions
@@ -72,13 +90,17 @@
  * Function:  stm32_timerisr
  *
  * Description:
- *   The timer ISR will perform a variety of services for various portions
- *   of the systems.
+ *   TIM2 update interrupt handler.  Clears the interrupt flag and
+ *   processes the system timer tick.
  *
  ****************************************************************************/
 
 static int stm32_timerisr(int irq, uint32_t *regs, void *arg)
 {
+  /* Clear the update interrupt flag */
+
+  putreg32(~TIM_SR_UIF, STM32_TIM2_BASE + STM32_TIM_SR_OFFSET);
+
   /* Process timer interrupt */
 
   nxsched_process_timer();
@@ -93,36 +115,53 @@ static int stm32_timerisr(int irq, uint32_t *regs, void *arg)
  * Function:  up_timer_initialize
  *
  * Description:
- *   This function is called during start-up to initialize
- *   the timer interrupt.
+ *   This function is called during start-up to initialize the system
+ *   timer interrupt using TIM2.
  *
  ****************************************************************************/
 
 void up_timer_initialize(void)
 {
-  uint32_t regval;
+  /* Enable TIM2 clock on APB1 using the atomic SET register */
 
-  /* Set the SysTick interrupt to the default priority */
+  putreg32(RCC_APB1ENR1_TIM2EN, STM32_RCC_APB1ENSR1);
 
-  regval = getreg32(NVIC_SYSH12_15_PRIORITY);
-  regval &= ~NVIC_SYSH_PRIORITY_PR15_MASK;
-  regval |= (NVIC_SYSH_PRIORITY_DEFAULT << NVIC_SYSH_PRIORITY_PR15_SHIFT);
-  putreg32(regval, NVIC_SYSH12_15_PRIORITY);
+  /* Stop the timer while configuring */
 
-  /* Configure SysTick to interrupt at the requested rate */
+  putreg32(0, STM32_TIM2_BASE + STM32_TIM_CR1_OFFSET);
 
-  putreg32(SYSTICK_RELOAD, NVIC_SYSTICK_RELOAD);
+  /* Set prescaler to 0 (timer runs at full APB1 clock = HCLK) */
 
-  /* Attach the timer interrupt vector */
+  putreg32(0, STM32_TIM2_BASE + STM32_TIM_PSC_OFFSET);
 
-  irq_attach(STM32_IRQ_SYSTICK, (xcpt_t)stm32_timerisr, NULL);
+  /* Set auto-reload value for the desired tick rate */
 
-  /* Enable SysTick interrupts */
+  putreg32(TIM2_RELOAD, STM32_TIM2_BASE + STM32_TIM_ARR_OFFSET);
 
-  putreg32((NVIC_SYSTICK_CTRL_CLKSOURCE | NVIC_SYSTICK_CTRL_TICKINT |
-            NVIC_SYSTICK_CTRL_ENABLE), NVIC_SYSTICK_CTRL);
+  /* Generate an update event to load PSC and ARR immediately */
 
-  /* And enable the timer interrupt */
+  putreg32(TIM_EGR_UG, STM32_TIM2_BASE + STM32_TIM_EGR_OFFSET);
 
-  up_enable_irq(STM32_IRQ_SYSTICK);
+  /* Clear the update interrupt flag (UG sets UIF) */
+
+  putreg32(~TIM_SR_UIF, STM32_TIM2_BASE + STM32_TIM_SR_OFFSET);
+
+  /* Attach the TIM2 interrupt handler */
+
+  irq_attach(STM32_IRQ_TIM2, (xcpt_t)stm32_timerisr, NULL);
+
+  /* Enable TIM2 interrupt in NVIC (priority is set to default by
+   * up_irqinitialize before this function is called).
+   */
+
+  up_enable_irq(STM32_IRQ_TIM2);
+
+  /* Enable the update interrupt in TIM2 */
+
+  putreg32(TIM_DIER_UIE, STM32_TIM2_BASE + STM32_TIM_DIER_OFFSET);
+
+  /* Start the timer with auto-reload preload enabled */
+
+  putreg32(TIM_CR1_CEN | TIM_CR1_ARPE,
+           STM32_TIM2_BASE + STM32_TIM_CR1_OFFSET);
 }

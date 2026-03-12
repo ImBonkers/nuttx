@@ -92,17 +92,22 @@ void up_idle(void)
 
   /* Sleep until an interrupt occurs to save power. */
 
-  /* WFI is disabled on STM32N6 because the Cortex-M55 implementation
-   * gates both FCLK and the external reference clock during WFI,
-   * stopping SysTick entirely.  Phase 2 should use a hardware timer
-   * (TIM2) with an independent APB clock, then WFI can be re-enabled.
+  /* Ensure SLEEPDEEP is clear so WFI enters SLEEP (not STOP) mode.
+   * In SLEEP mode, peripheral clocks (APB1/TIM2) keep running.
+   * In STOP mode (SLEEPDEEP=1), all clocks stop.
    */
 
-#if 0
+  {
+    uint32_t scr = getreg32(0xe000ed10);
+    if (scr & (1 << 2))
+      {
+        putreg32(scr & ~(1 << 2), 0xe000ed10);
+      }
+  }
+
   BEGIN_IDLE();
   asm("WFI");
   END_IDLE();
-#endif
 
 #endif
 }
