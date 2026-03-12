@@ -305,21 +305,28 @@
 
 /* Clock Configuration Register 2 (RCC_CFGR2) — bus prescalers */
 
+/* Clock Configuration Register 2 (RCC_CFGR2) — bus prescalers
+ *
+ * NOTE: STM32N6 uses simple power-of-2 encoding for prescalers:
+ *   0=/1, 1=/2, 2=/4, 3=/8, 4=/16, 5=/32, 6=/64, 7=/128
+ * This differs from older STM32 families that used the "4+x" encoding.
+ */
+
 #define RCC_CFGR2_PPRE1_SHIFT     (0)        /* Bits 2:0: APB1 prescaler */
 #define RCC_CFGR2_PPRE1_MASK      (7 << RCC_CFGR2_PPRE1_SHIFT)
 #  define RCC_CFGR2_PPRE1_HCLK    (0 << RCC_CFGR2_PPRE1_SHIFT) /* /1 */
-#  define RCC_CFGR2_PPRE1_HCLKd2  (4 << RCC_CFGR2_PPRE1_SHIFT) /* /2 */
-#  define RCC_CFGR2_PPRE1_HCLKd4  (5 << RCC_CFGR2_PPRE1_SHIFT) /* /4 */
-#  define RCC_CFGR2_PPRE1_HCLKd8  (6 << RCC_CFGR2_PPRE1_SHIFT) /* /8 */
-#  define RCC_CFGR2_PPRE1_HCLKd16 (7 << RCC_CFGR2_PPRE1_SHIFT) /* /16 */
+#  define RCC_CFGR2_PPRE1_HCLKd2  (1 << RCC_CFGR2_PPRE1_SHIFT) /* /2 */
+#  define RCC_CFGR2_PPRE1_HCLKd4  (2 << RCC_CFGR2_PPRE1_SHIFT) /* /4 */
+#  define RCC_CFGR2_PPRE1_HCLKd8  (3 << RCC_CFGR2_PPRE1_SHIFT) /* /8 */
+#  define RCC_CFGR2_PPRE1_HCLKd16 (4 << RCC_CFGR2_PPRE1_SHIFT) /* /16 */
 
 #define RCC_CFGR2_PPRE2_SHIFT     (4)        /* Bits 6:4: APB2 prescaler */
 #define RCC_CFGR2_PPRE2_MASK      (7 << RCC_CFGR2_PPRE2_SHIFT)
 #  define RCC_CFGR2_PPRE2_HCLK    (0 << RCC_CFGR2_PPRE2_SHIFT) /* /1 */
-#  define RCC_CFGR2_PPRE2_HCLKd2  (4 << RCC_CFGR2_PPRE2_SHIFT) /* /2 */
-#  define RCC_CFGR2_PPRE2_HCLKd4  (5 << RCC_CFGR2_PPRE2_SHIFT) /* /4 */
-#  define RCC_CFGR2_PPRE2_HCLKd8  (6 << RCC_CFGR2_PPRE2_SHIFT) /* /8 */
-#  define RCC_CFGR2_PPRE2_HCLKd16 (7 << RCC_CFGR2_PPRE2_SHIFT) /* /16 */
+#  define RCC_CFGR2_PPRE2_HCLKd2  (1 << RCC_CFGR2_PPRE2_SHIFT) /* /2 */
+#  define RCC_CFGR2_PPRE2_HCLKd4  (2 << RCC_CFGR2_PPRE2_SHIFT) /* /4 */
+#  define RCC_CFGR2_PPRE2_HCLKd8  (3 << RCC_CFGR2_PPRE2_SHIFT) /* /8 */
+#  define RCC_CFGR2_PPRE2_HCLKd16 (4 << RCC_CFGR2_PPRE2_SHIFT) /* /16 */
 
 #define RCC_CFGR2_PPRE4_SHIFT     (12)       /* Bits 14:12: APB4 prescaler */
 #define RCC_CFGR2_PPRE4_MASK      (7 << RCC_CFGR2_PPRE4_SHIFT)
@@ -329,11 +336,11 @@
 
 #define RCC_CFGR2_HPRE_SHIFT      (20)       /* Bits 22:20: AHB prescaler */
 #define RCC_CFGR2_HPRE_MASK       (7 << RCC_CFGR2_HPRE_SHIFT)
-#  define RCC_CFGR2_HPRE_SYSCLK   (0 << RCC_CFGR2_HPRE_SHIFT) /* /1 */
-#  define RCC_CFGR2_HPRE_SYSCLKd2 (4 << RCC_CFGR2_HPRE_SHIFT) /* /2 */
-#  define RCC_CFGR2_HPRE_SYSCLKd4 (5 << RCC_CFGR2_HPRE_SHIFT) /* /4 */
-#  define RCC_CFGR2_HPRE_SYSCLKd8 (6 << RCC_CFGR2_HPRE_SHIFT) /* /8 */
-#  define RCC_CFGR2_HPRE_SYSCLKd16 (7 << RCC_CFGR2_HPRE_SHIFT) /* /16 */
+#  define RCC_CFGR2_HPRE_SYSCLK    (0 << RCC_CFGR2_HPRE_SHIFT) /* /1 */
+#  define RCC_CFGR2_HPRE_SYSCLKd2  (1 << RCC_CFGR2_HPRE_SHIFT) /* /2 */
+#  define RCC_CFGR2_HPRE_SYSCLKd4  (2 << RCC_CFGR2_HPRE_SHIFT) /* /4 */
+#  define RCC_CFGR2_HPRE_SYSCLKd8  (3 << RCC_CFGR2_HPRE_SHIFT) /* /8 */
+#  define RCC_CFGR2_HPRE_SYSCLKd16 (4 << RCC_CFGR2_HPRE_SHIFT) /* /16 */
 
 /* HSI Configuration Register (RCC_HSICFGR) */
 

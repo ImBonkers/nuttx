@@ -177,6 +177,10 @@ void stm32_rcc_enableperipherals(void)
  *       -> PPRE1 /1 = 200 MHz  (APB1 = PCLK1)
  *       -> PPRE2 /1 = 200 MHz  (APB2 = PCLK2)
  *
+ *   IMPORTANT: CFGR1 locks after the first write — CPUSW and SYSSW must
+ *   be written together in a single putreg32().  CFGR2 (bus prescalers)
+ *   also locks after CFGR1 is written, so it must be set first.
+ *
  ****************************************************************************/
 
 void stm32_stdclockconfig(void)
@@ -237,17 +241,20 @@ void stm32_stdclockconfig(void)
     }
 
   /* 6. Configure IC dividers (source=PLL1, register value = divider - 1)
-   *    DEBUG: Use slow dividers first (1200/20=60MHz) to test switch mechanism.
+   *    IC1  = PLL1 / 2  = 600 MHz  (CPU)
+   *    IC2  = PLL1 / 3  = 400 MHz  (SYSCLK)
+   *    IC6  = PLL1 / 4  = 300 MHz  (AHB / NPU)
+   *    IC11 = PLL1 / 3  = 400 MHz  (APB / NPU RAMS)
    */
 
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC1CFGR);   /* IC1: 1200/20 = 60 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC2CFGR);   /* IC2: 1200/20 = 60 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC6CFGR);   /* IC6: 1200/20 = 60 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC11CFGR);  /* IC11: 1200/20 = 60 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (1 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC1CFGR);   /* IC1: 1200/2 = 600 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (2 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC2CFGR);   /* IC2: 1200/3 = 400 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (3 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC6CFGR);   /* IC6: 1200/4 = 300 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (2 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC11CFGR);  /* IC11: 1200/3 = 400 MHz */
 
   /* 7. Enable IC1, IC2, IC6, IC11 */
 
@@ -255,9 +262,43 @@ void stm32_stdclockconfig(void)
          | RCC_DIVENR_IC6EN | RCC_DIVENR_IC11EN,
            STM32_RCC_DIVENSR);
 
-  /* For now, stay on HSI.  The clock switch will be attempted later
-   * from stm32_pll1_switch() after the UART is up for diagnostics.
+  /* 8. Set bus prescalers BEFORE the CFGR1 switch — CFGR2 locks after
+   *    CFGR1 is written.  HPRE = /2 gives HCLK = IC6/2 = 150 MHz.
+   *    PPRE1 = /1, PPRE2 = /1 → PCLK1 = PCLK2 = HCLK = 150 MHz.
    */
 
-  putreg32(0, STM32_RCC_CFGR2);  /* Clear prescalers (HPRE=/1) for HSI */
+  putreg32(RCC_CFGR2_HPRE_SYSCLKd2, STM32_RCC_CFGR2);
+
+  /* 9. Switch CPU and system bus clocks to PLL1-derived IC outputs.
+   *    CFGR1 locks after the first write — both CPUSW and SYSSW must be
+   *    written together in a single putreg32() call.
+   */
+
+  __asm volatile ("dsb sy");
+
+  regval = getreg32(STM32_RCC_CFGR1);
+  regval &= ~(RCC_CFGR1_CPUSW_MASK | RCC_CFGR1_SYSSW_MASK);
+  regval |= RCC_CFGR1_CPUSW_IC1 | RCC_CFGR1_SYSSW_IC2_IC6_IC11;
+  putreg32(regval, STM32_RCC_CFGR1);
+
+  __asm volatile ("dsb sy");
+  __asm volatile ("isb sy");
+
+  /* Re-enable SRAM clocks defensively after clock domain switch */
+
+  putreg32(RCC_MEMENR_ALLAXISRAM | RCC_MEMENR_CACHEAXIRAMEN,
+           STM32_RCC_MEMENSR);
+
+  /* Wait for switch confirmation */
+
+  for (timeout = PLL1RDY_TIMEOUT; timeout > 0; timeout--)
+    {
+      if (((getreg32(STM32_RCC_CFGR1) & RCC_CFGR1_CPUSWS_MASK)
+            == RCC_CFGR1_CPUSWS_IC1) &&
+          ((getreg32(STM32_RCC_CFGR1) & RCC_CFGR1_SYSSWS_MASK)
+            == RCC_CFGR1_SYSSWS_IC2_IC6_IC11))
+        {
+          break;
+        }
+    }
 }

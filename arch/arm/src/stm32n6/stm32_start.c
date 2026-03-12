@@ -217,23 +217,6 @@ static inline void stm32_enable_lob(void)
  * Public Functions
  ****************************************************************************/
 
-/****************************************************************************
- * Name: stm32_try_syssw
- *
- * Description:
- *   Attempt the SYSSW (system bus clock switch) from HSI to IC2/IC6/IC11.
- *   Isolated in a separate noinline function to prevent compiler register
- *   pressure from corrupting the caller's stack frame.
- *
- ****************************************************************************/
-
-static void __attribute__((noinline)) stm32_try_syssw(void)
-{
-  /* Empty — switch moved to combined write in CPUSW diagnostic */
-
-  early_print_str("(syssw placeholder)\r\n");
-}
-
 #ifdef CONFIG_ARMV8M_STACKCHECK
 /* we need to get r10 set before we can allow instrumentation calls */
 
@@ -363,75 +346,6 @@ void __start(void)
   ((void (*volatile *)(void))_vectors)[4] = stm32_early_fault_entry;
   ((void (*volatile *)(void))_vectors)[5] = stm32_early_fault_entry;
   ((void (*volatile *)(void))_vectors)[6] = stm32_early_fault_entry;
-
-  /* PLL1 clock switch diagnostic — UART is now up at 64MHz HSI */
-
-  {
-    uint32_t regval;
-    volatile int32_t timeout;
-
-    early_print_str("\r\nCR=");
-    early_print_hex(getreg32(STM32_RCC_CR));
-    early_print_str(" SR=");
-    early_print_hex(getreg32(STM32_RCC_SR));
-    early_print_str(" C1=");
-    early_print_hex(getreg32(STM32_RCC_CFGR1));
-    early_print_str(" DIV=");
-    early_print_hex(getreg32(STM32_RCC_DIVENR));
-    early_print_str("\r\n");
-
-    /* Write CPUSW + SYSSW simultaneously in a single write.
-     * CFGR1 appears to lock after the first write, so both switches
-     * must be done together.
-     *
-     * After switch with IC dividers at /20, HPRE=/1, PPRE2=/1:
-     *   CPU   = IC1  = 1200/20 = 60 MHz
-     *   SYSCLK = IC2 = 1200/20 = 60 MHz
-     *   HCLK  = SYSCLK / 1 = 60 MHz
-     *   PCLK2 = HCLK / 1 = 60 MHz
-     *   BRR   = 60000000 / 115200 = 520
-     */
-
-    early_print_str("SW...");
-    regval = getreg32(STM32_RCC_CFGR1);
-    regval &= ~(RCC_CFGR1_CPUSW_MASK | RCC_CFGR1_SYSSW_MASK);
-    regval |= RCC_CFGR1_CPUSW_IC1 | RCC_CFGR1_SYSSW_IC2_IC6_IC11;
-
-    /* Flush all UART output before switching clocks */
-
-    while ((getreg32(STM32_USART1_ISR) & (1 << 6)) == 0);  /* Wait TC */
-    __asm volatile ("dsb sy");
-
-    putreg32(regval, STM32_RCC_CFGR1);
-    __asm volatile ("dsb sy");
-    __asm volatile ("isb sy");
-
-    /* Re-enable SRAM clocks (defensive — in case switch disrupted them) */
-
-    putreg32(RCC_MEMENR_ALLAXISRAM | RCC_MEMENR_CACHEAXIRAMEN,
-             STM32_RCC_MEMENSR);
-    __asm volatile ("dsb sy");
-
-    for (timeout = 7500000; timeout > 0; timeout--)
-      {
-        if (((getreg32(STM32_RCC_CFGR1) & RCC_CFGR1_CPUSWS_MASK)
-              == RCC_CFGR1_CPUSWS_IC1) &&
-            ((getreg32(STM32_RCC_CFGR1) & RCC_CFGR1_SYSSWS_MASK)
-              == RCC_CFGR1_SYSSWS_IC2_IC6_IC11))
-          {
-            break;
-          }
-      }
-
-    early_print_str("done=");
-    early_print_hex(getreg32(STM32_RCC_CFGR1));
-    early_print_str(" t=");
-    early_print_hex((uint32_t)timeout);
-    early_print_str("\r\n");
-
-  }
-
-  stm32_try_syssw();
 
 #ifdef CONFIG_ARMV8M_STACKCHECK
   arm_stack_check_init();

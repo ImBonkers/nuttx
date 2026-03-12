@@ -51,12 +51,13 @@
  */
 
 #define STM32_HSI_FREQUENCY     64000000ul
-#define STM32_SYSCLK_FREQUENCY  64000000ul   /* DEBUG: HSI, switch attempted later */
-#define STM32_HCLK_FREQUENCY    64000000ul
-#define STM32_PCLK1_FREQUENCY   64000000ul
-#define STM32_PCLK2_FREQUENCY   64000000ul
+#define STM32_CPUCLK_FREQUENCY  600000000ul  /* IC1 = PLL1/2 = 600 MHz */
+#define STM32_SYSCLK_FREQUENCY  400000000ul  /* IC2 = PLL1/3 = 400 MHz */
+#define STM32_HCLK_FREQUENCY    200000000ul  /* SYSCLK / HPRE(2) = 200 MHz */
+#define STM32_PCLK1_FREQUENCY   200000000ul  /* HCLK / PPRE1(1) = 200 MHz */
+#define STM32_PCLK2_FREQUENCY   200000000ul  /* HCLK / PPRE2(1) = 200 MHz */
 
-#define BOARD_LOOPSPERMSEC      8000
+#define BOARD_LOOPSPERMSEC      75000
 
 /* LED definitions **********************************************************/
 

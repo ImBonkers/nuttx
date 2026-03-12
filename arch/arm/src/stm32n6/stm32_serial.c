@@ -275,7 +275,7 @@ static struct stm32_serial_s g_usart1priv =
   .bits          = CONFIG_USART1_BITS,
   .stopbits2     = CONFIG_USART1_2STOP,
   .baud          = CONFIG_USART1_BAUD,
-  .apbclock      = STM32_PCLK2_FREQUENCY,
+  .apbclock      = STM32_HSI_FREQUENCY,  /* USART1SEL=HSI via CCIPR13 */
   .usartbase     = STM32_USART1_BASE,
   .tx_gpio       = GPIO_USART1_TX,
   .rx_gpio       = GPIO_USART1_RX,
