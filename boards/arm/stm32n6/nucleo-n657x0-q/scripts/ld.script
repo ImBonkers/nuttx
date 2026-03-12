@@ -74,10 +74,8 @@ SECTIONS
     } > sram
     __exidx_end = ABSOLUTE(.);
 
-    . = ALIGN(32);
-    _eronly = ABSOLUTE(.);
-
     .data : {
+        _eronly = ABSOLUTE(.);
         _sdata = ABSOLUTE(.);
         *(.data .data.*)
         *(.gnu.linkonce.d.*)
