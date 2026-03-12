@@ -155,6 +155,7 @@
 #define USART_CR1_RTOIE           (1 << 26) /* Bit 26: Receiver timeout interrupt enable */
 #define USART_CR1_EOBIE           (1 << 27) /* Bit 27: End of block interrupt enable */
 #define USART_CR1_M1              (1 << 28) /* Bit 28: Word length */
+#define USART_CR1_FIFOEN          (1 << 29) /* Bit 29: FIFO mode enable */
 
 #define USART_CR1_ALLINTS         (USART_CR1_IDLEIE|USART_CR1_RXNEIE| \
                                    USART_CR1_TCIE|USART_CR1_TXEIE| \

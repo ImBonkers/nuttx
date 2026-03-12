@@ -42,6 +42,12 @@
 #include "stm32_start.h"
 
 /****************************************************************************
+ * Private Function Prototypes
+ ****************************************************************************/
+
+void stm32_early_fault_dump(uint32_t *frame);
+
+/****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
 
@@ -75,6 +81,94 @@ const uintptr_t g_idle_topstack = HEAP_BASE;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: early_print_hex
+ *
+ * Description:
+ *   Print a 32-bit value as hex via arm_lowputc (polling UART).
+ *
+ ****************************************************************************/
+
+static void early_print_hex(uint32_t val)
+{
+  static const char hex[] = "0123456789ABCDEF";
+  int i;
+
+  for (i = 28; i >= 0; i -= 4)
+    {
+      arm_lowputc(hex[(val >> i) & 0xf]);
+    }
+}
+
+/****************************************************************************
+ * Name: early_print_str
+ *
+ * Description:
+ *   Print a string via arm_lowputc (polling UART).
+ *
+ ****************************************************************************/
+
+static void early_print_str(const char *s)
+{
+  while (*s)
+    {
+      arm_lowputc(*s++);
+    }
+}
+
+/****************************************************************************
+ * Name: stm32_early_fault_dump
+ *
+ * Description:
+ *   Minimal fault handler that dumps CFSR, PC, LR, SP via polling UART.
+ *   Called from the naked entry point with the exception stack frame.
+ *
+ ****************************************************************************/
+
+void stm32_early_fault_dump(uint32_t *frame)
+{
+  uint32_t cfsr = getreg32(0xe000ed28);  /* CFSR */
+  uint32_t hfsr = getreg32(0xe000ed2c);  /* HFSR */
+  uint32_t bfar = getreg32(0xe000ed38);  /* BFAR */
+
+  early_print_str("\r\n!FAULT C=");
+  early_print_hex(cfsr);
+  early_print_str(" H=");
+  early_print_hex(hfsr);
+  early_print_str(" PC=");
+  early_print_hex(frame[6]);
+  early_print_str(" LR=");
+  early_print_hex(frame[5]);
+  early_print_str(" B=");
+  early_print_hex(bfar);
+  early_print_str(" SP=");
+  early_print_hex((uint32_t)frame);
+  early_print_str("\r\n");
+
+  for (; ; );
+}
+
+/****************************************************************************
+ * Name: stm32_early_fault_entry
+ *
+ * Description:
+ *   Naked entry point for the early fault handler.  Determines whether the
+ *   exception frame is on MSP or PSP and passes it to the C dump function.
+ *
+ ****************************************************************************/
+
+__attribute__((naked)) void stm32_early_fault_entry(void)
+{
+  __asm__ volatile
+    (
+      "tst lr, #4\n\t"
+      "ite eq\n\t"
+      "mrseq r0, msp\n\t"
+      "mrsne r0, psp\n\t"
+      "b stm32_early_fault_dump\n\t"
+    );
+}
 
 /****************************************************************************
  * Name: showprogress
@@ -199,11 +293,34 @@ void __start(void)
    */
 
   stm32_clockconfig();
+
+  /* Enable BSECEN per STM32N6 errata ES0620: "Do not clear BSECEN bit
+   * before entering Low-power mode."  If BSECEN (RCC_APB4ENR2 bit 1) is
+   * not set, the Cortex-M55 delivers incorrect cpu_sleep_in signals to
+   * the RCC, causing WFI/sleep mode to fail.  Use the SET register
+   * (APB4ENSR2 at RCC + 0x0A78) to enable it atomically.
+   */
+
+  putreg32(0x02, STM32_RCC_BASE + 0x0a78);  /* RCC_APB4ENSR2: BSECEN */
+
   stm32_pwr_enablevddio();
   stm32_lowsetup();
   stm32_gpioinit();
   __asm volatile ("dsb sy");  /* Flush write buffer — catch deferred bus faults here */
   showprogress('A');
+
+  /* Install early fault handler now that UART is configured.  The vector
+   * table is in writable SRAM, so we can patch HardFault (index 3) to
+   * point at our minimal handler that dumps CFSR/PC via polling UART.
+   * This catches faults before up_irqinitialize() attaches NuttX handlers.
+   * Without SHCSR enabling separate fault handlers, all faults escalate
+   * to HardFault and arrive here.
+   */
+
+  ((void (*volatile *)(void))_vectors)[3] = stm32_early_fault_entry;  /* HardFault */
+  ((void (*volatile *)(void))_vectors)[4] = stm32_early_fault_entry;  /* MemManage */
+  ((void (*volatile *)(void))_vectors)[5] = stm32_early_fault_entry;  /* BusFault */
+  ((void (*volatile *)(void))_vectors)[6] = stm32_early_fault_entry;  /* UsageFault */
 
 #ifdef CONFIG_ARMV8M_STACKCHECK
   arm_stack_check_init();

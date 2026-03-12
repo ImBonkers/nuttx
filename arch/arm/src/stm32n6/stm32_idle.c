@@ -92,7 +92,13 @@ void up_idle(void)
 
   /* Sleep until an interrupt occurs to save power. */
 
-#if !(defined(CONFIG_DEBUG_SYMBOLS) && defined(CONFIG_STM32N6_DISABLE_IDLE_SLEEP_DURING_DEBUG))
+  /* WFI is disabled on STM32N6 because the Cortex-M55 implementation
+   * gates both FCLK and the external reference clock during WFI,
+   * stopping SysTick entirely.  Phase 2 should use a hardware timer
+   * (TIM2) with an independent APB clock, then WFI can be re-enabled.
+   */
+
+#if 0
   BEGIN_IDLE();
   asm("WFI");
   END_IDLE();

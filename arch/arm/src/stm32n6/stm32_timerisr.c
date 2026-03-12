@@ -47,21 +47,14 @@
  * system clock ticks per second.  That value is a user configurable setting
  * that defaults to 100 (100 ticks per second = 10 MS interval).
  *
- * The RCC feeds the Cortex System Timer (SysTick) with the AHB clock (HCLK)
- * divided by 8.  The SysTick can work either with this clock or with the
- * Cortex clock (HCLK), configurable in the SysTick Control and Status
- * register.
+ * On the STM32N6 Cortex-M55, WFI halts both the processor clock and
+ * the external reference clock, stopping SysTick regardless of CLKSOURCE.
+ * WFI is therefore disabled in stm32_idle.c to keep SysTick running.
+ * A future improvement is to replace SysTick with a hardware timer (TIM2)
+ * that has an independent APB clock surviving WFI.
  */
 
-/* Power up default is HCLK, not HCLK/8. */
-
-#undef CONFIG_STM32N6_SYSTICK_HCLKd8
-
-#ifdef CONFIG_STM32N6_SYSTICK_HCLKd8
-#  define SYSTICK_RELOAD ((STM32_HCLK_FREQUENCY / 8 / CLK_TCK) - 1)
-#else
-#  define SYSTICK_RELOAD ((STM32_HCLK_FREQUENCY / CLK_TCK) - 1)
-#endif
+#define SYSTICK_RELOAD ((STM32_HCLK_FREQUENCY / CLK_TCK) - 1)
 
 /* The size of the reload field is 24 bits.  Verify that the reload value
  * will fit in the reload register.

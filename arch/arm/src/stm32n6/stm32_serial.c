@@ -1137,10 +1137,13 @@ static int stm32serial_setup(struct uart_dev_s *dev)
 
   /* Configure CR1 */
 
-  /* Clear TE, RE, and all interrupt enable bits */
+  /* Clear UE, TE, RE, and all interrupt enable bits.
+   * UE must be cleared so FIFOEN can be set when re-enabling.
+   */
 
   regval  = stm32serial_getreg(priv, STM32_USART_CR1_OFFSET);
-  regval &= ~(USART_CR1_TE | USART_CR1_RE | USART_CR1_ALLINTS);
+  regval &= ~(USART_CR1_UE | USART_CR1_TE | USART_CR1_RE |
+              USART_CR1_ALLINTS);
 
   stm32serial_putreg(priv, STM32_USART_CR1_OFFSET, regval);
 
@@ -1161,7 +1164,8 @@ static int stm32serial_setup(struct uart_dev_s *dev)
   /* Enable Rx, Tx, and the USART */
 
   regval      = stm32serial_getreg(priv, STM32_USART_CR1_OFFSET);
-  regval     |= (USART_CR1_UE | USART_CR1_TE | USART_CR1_RE);
+  regval     |= (USART_CR1_UE | USART_CR1_TE | USART_CR1_RE |
+                 USART_CR1_FIFOEN);
   stm32serial_putreg(priv, STM32_USART_CR1_OFFSET, regval);
 
 #endif /* CONFIG_SUPPRESS_UART_CONFIG */
@@ -1324,7 +1328,6 @@ static int stm32serial_interrupt(int irq, void *context, void *arg)
   struct stm32_serial_s *priv = (struct stm32_serial_s *)arg;
   int  passes;
   bool handled;
-
   DEBUGASSERT(priv != NULL);
 
   /* Report serial activity to the power management logic */

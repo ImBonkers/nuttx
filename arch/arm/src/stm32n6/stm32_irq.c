@@ -227,8 +227,6 @@ void up_irqinitialize(void)
   int num_priority_registers;
   int i;
 
-  arm_lowputc('I');  /* Debug: entering IRQ init */
-
   /* Disable all interrupts */
 
   for (i = 0; i < NR_IRQS - STM32_IRQ_FIRST; i += 32)
