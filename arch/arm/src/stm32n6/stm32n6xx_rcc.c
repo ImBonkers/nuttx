@@ -42,6 +42,7 @@
  */
 
 #define HSIRDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
+#define PLL1RDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
 
 /****************************************************************************
  * Private Functions
@@ -164,43 +165,99 @@ void stm32_rcc_enableperipherals(void)
  * Name: stm32_stdclockconfig
  *
  * Description:
- *   Phase 1 clock configuration: just verify HSI is ready.
- *   The STM32N6 boots with HSI at 64 MHz by default.
- *   No PLL configuration is needed for initial bring-up.
+ *   Configure PLL1 for 600 MHz CPU clock, matching the FSBL configuration.
+ *
+ *   Clock tree:
+ *     HSI 64 MHz -> PLL1 (M=4, N=75) -> VCO 1200 MHz -> PDIV1/1 -> 1200 MHz
+ *       -> IC1  /2  = 600 MHz  (CPU clock via CPUSW)
+ *       -> IC2  /3  = 400 MHz  \
+ *       -> IC6  /4  = 300 MHz   > System bus via SYSSW
+ *       -> IC11 /3  = 400 MHz  /
+ *       -> HPRE /2  = 200 MHz  (HCLK)
+ *       -> PPRE1 /1 = 200 MHz  (APB1 = PCLK1)
+ *       -> PPRE2 /1 = 200 MHz  (APB2 = PCLK2)
  *
  ****************************************************************************/
 
 void stm32_stdclockconfig(void)
 {
   volatile int32_t timeout;
+  uint32_t regval;
 
-  /* The STM32N6 boots from HSI at 64 MHz.  HSI should already be enabled
-   * and ready from reset.  Just verify it.
-   */
+  /* 1. Verify HSI is ready (already running from reset) */
 
   for (timeout = HSIRDY_TIMEOUT; timeout > 0; timeout--)
     {
-      /* Check if the HSIRDY flag is set in the SR register.
-       * Note: STM32N6 uses RCC_SR (status register) not RCC_CR for
-       * ready flags.
-       */
-
       if ((getreg32(STM32_RCC_SR) & RCC_SR_HSIRDY) != 0)
         {
-          /* HSI is ready - break out with timeout > 0 */
-
           break;
         }
     }
 
-  /* If timeout expired, we are in trouble.  But there is not much we can
-   * do about it - the HSI should always be available after reset.
+  /* 2. Disable PLL1 via the Control Clear Register (atomic) */
+
+  putreg32(RCC_CR_PLL1ON, STM32_RCC_CCR);
+
+  for (timeout = PLL1RDY_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(STM32_RCC_SR) & RCC_SR_PLL1RDY) == 0)
+        {
+          break;
+        }
+    }
+
+  /* 3. Configure PLL1CFGR1: source=HSI, M=4, N=75
+   *    VCO_in  = 64 MHz / 4 = 16 MHz
+   *    VCO_out = 16 MHz * 75 = 1200 MHz
    */
 
-  /* Clear AHB/APB prescalers.  The boot ROM in DEV mode sets HPRE to /2
-   * (CFGR2 = 0x00100000), halving HCLK to 32 MHz.  We need all buses at
-   * the full 64 MHz HSI rate so BRR and SysTick calculations are correct.
+  regval = (RCC_PLL1CFGR1_SEL_HSI)
+         | (4 << RCC_PLL1CFGR1_DIVM_SHIFT)
+         | (75 << RCC_PLL1CFGR1_DIVN_SHIFT);
+  putreg32(regval, STM32_RCC_PLL1CFGR1);
+
+  /* 4. Configure PLL1CFGR3: disable SS, PDIV1=1, PDIV2=1, enable post-div */
+
+  regval = RCC_PLL1CFGR3_MODSSDIS
+         | RCC_PLL1CFGR3_PDIVEN
+         | (1 << RCC_PLL1CFGR3_PDIV1_SHIFT)
+         | (1 << RCC_PLL1CFGR3_PDIV2_SHIFT);
+  putreg32(regval, STM32_RCC_PLL1CFGR3);
+
+  /* 5. Enable PLL1 via the Control Set Register (atomic) */
+
+  putreg32(RCC_CR_PLL1ON, STM32_RCC_CSR);
+
+  for (timeout = PLL1RDY_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(STM32_RCC_SR) & RCC_SR_PLL1RDY) != 0)
+        {
+          break;
+        }
+    }
+
+  /* 6. Configure IC dividers (source=PLL1, register value = divider - 1)
+   *    DEBUG: Use slow dividers first (1200/20=60MHz) to test switch mechanism.
    */
 
-  putreg32(0, STM32_RCC_CFGR2);
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC1CFGR);   /* IC1: 1200/20 = 60 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC2CFGR);   /* IC2: 1200/20 = 60 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC6CFGR);   /* IC6: 1200/20 = 60 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (19 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC11CFGR);  /* IC11: 1200/20 = 60 MHz */
+
+  /* 7. Enable IC1, IC2, IC6, IC11 */
+
+  putreg32(RCC_DIVENR_IC1EN | RCC_DIVENR_IC2EN
+         | RCC_DIVENR_IC6EN | RCC_DIVENR_IC11EN,
+           STM32_RCC_DIVENSR);
+
+  /* For now, stay on HSI.  The clock switch will be attempted later
+   * from stm32_pll1_switch() after the UART is up for diagnostics.
+   */
+
+  putreg32(0, STM32_RCC_CFGR2);  /* Clear prescalers (HPRE=/1) for HSI */
 }

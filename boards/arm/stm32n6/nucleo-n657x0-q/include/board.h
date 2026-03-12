@@ -38,23 +38,23 @@
 
 /* Clocking *****************************************************************/
 
-/* The Nucleo-N657X0-Q runs from the internal 64 MHz HSI oscillator for
- * Phase 1 bringup.  No PLL is configured.  The STM32N6 can run up to
- * 800 MHz with overdrive, but that requires PLL configuration which will
- * be added in a later phase.
+/* PLL1 is configured for 600 MHz CPU clock:
  *
- *   System Clock Source : HSI (64 MHz)
- *   SYSCLK Freq (MHz)  : 64
- *   HCLK Freq   (MHz)  : 64
+ *   HSI 64 MHz -> PLL1 (M=4, N=75, P1=1, P2=1) -> 1200 MHz
+ *     IC1  /2  = 600 MHz  -> CPU (CPUSW = IC1)
+ *     IC2  /3  = 400 MHz  \
+ *     IC6  /4  = 300 MHz   > System bus (SYSSW)
+ *     IC11 /3  = 400 MHz  /
+ *     HPRE /2  = 200 MHz  -> HCLK
+ *     PPRE1 /1 = 200 MHz  -> APB1 (PCLK1)
+ *     PPRE2 /1 = 200 MHz  -> APB2 (PCLK2)
  */
 
 #define STM32_HSI_FREQUENCY     64000000ul
-#define STM32_SYSCLK_FREQUENCY  64000000ul
+#define STM32_SYSCLK_FREQUENCY  64000000ul   /* DEBUG: HSI, switch attempted later */
 #define STM32_HCLK_FREQUENCY    64000000ul
 #define STM32_PCLK1_FREQUENCY   64000000ul
 #define STM32_PCLK2_FREQUENCY   64000000ul
-
-/* board_loopspermsec: approximate loops per millisecond at 64 MHz */
 
 #define BOARD_LOOPSPERMSEC      8000
 
