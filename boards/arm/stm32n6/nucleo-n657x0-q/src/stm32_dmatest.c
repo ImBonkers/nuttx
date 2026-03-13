@@ -37,7 +37,6 @@
 #include "arm_internal.h"
 #include "stm32_dma.h"
 #include "hardware/stm32_gpdma.h"
-#include "hardware/stm32n6xxx_memorymap.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -114,35 +113,6 @@ static int dmatest_run_one(DMA_HANDLE handle, const char *name)
   g_dma_status = 0;
 
   stm32_dmasetup(handle, &cfg);
-
-  /* Debug: read back channel registers via base ptr in handle.
-   * handle points to gpdma_ch_s: instance(u8), channel(u8), irq(u8),
-   * type(enum=int), free(bool), base(u32) at offset ~12 bytes.
-   * Just use the known channel 0 base directly.
-   */
-
-  {
-    /* Extract base from handle struct (base is at a known offset).
-     * Simpler: just compute from instance+channel.
-     */
-
-    uint8_t inst = *((uint8_t *)handle);     /* dma_instance */
-    uint8_t ch   = *((uint8_t *)handle + 1); /* channel */
-    uint32_t base = (inst == DMA_INST_HPDMA1)
-                  ? STM32_HPDMA1_BASE : STM32_GPDMA1_BASE;
-    base += 0x80 * ch;
-
-    printf("    ch%d base=0x%08lx regs: SAR=0x%08lx DAR=0x%08lx "
-           "BR1=0x%08lx TR1=0x%08lx TR2=0x%08lx CR=0x%08lx\n",
-           ch, (unsigned long)base,
-           (unsigned long)getreg32(base + 0x9C),
-           (unsigned long)getreg32(base + 0xA0),
-           (unsigned long)getreg32(base + 0x98),
-           (unsigned long)getreg32(base + 0x90),
-           (unsigned long)getreg32(base + 0x94),
-           (unsigned long)getreg32(base + 0x64));
-  }
-
   stm32_dmastart(handle, dmatest_callback, NULL, false);
 
   for (timeout = 0; timeout < DMA_TEST_TIMEOUT && !g_dma_done; timeout++)
@@ -181,29 +151,8 @@ static int dmatest_run_one(DMA_HANDLE handle, const char *name)
 
   if (errors > 0)
     {
-      printf("FAIL (%d/%d mismatched)\n", errors, DMA_TEST_NWORDS);
-      printf("    src=%p dst=%p status=0x%02x\n",
-             g_dma_src, g_dma_dst, g_dma_status);
-      printf("    dst[0..3]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx\n",
-             (unsigned long)g_dma_dst[0], (unsigned long)g_dma_dst[1],
-             (unsigned long)g_dma_dst[2], (unsigned long)g_dma_dst[3]);
-
-      /* Dump RISAF2 (AXISRAM1) illegal access registers.
-       * RISAF2 Secure base = 0x54027000
-       * CR     @ +0x000
-       * IASR   @ +0x008
-       * IAR[0].IAESR @ +0x020
-       * IAR[0].IADDR @ +0x024
-       * REG[0].CFGR  @ +0x040
-       */
-
-      printf("    RISAF2: CR=0x%08lx IASR=0x%08lx "
-             "IAESR=0x%08lx IADDR=0x%08lx R0CFGR=0x%08lx\n",
-             (unsigned long)getreg32(0x54027000),
-             (unsigned long)getreg32(0x54027008),
-             (unsigned long)getreg32(0x54027020),
-             (unsigned long)getreg32(0x54027024),
-             (unsigned long)getreg32(0x54027040));
+      printf("FAIL (%d/%d mismatched, status=0x%02x)\n",
+             errors, DMA_TEST_NWORDS, g_dma_status);
       return -EIO;
     }
 

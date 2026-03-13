@@ -94,6 +94,8 @@ struct gpdma_ch_s
   uint8_t            dma_instance; /* DMA_INST_HPDMA1 or DMA_INST_GPDMA1 */
   uint8_t            channel;      /* Channel number within the instance */
   uint8_t            irq;          /* IRQ number for this channel */
+  uint8_t            fifo_bytes;   /* FIFO size in bytes (8/16/32/64) */
+  bool               has_2d;       /* 2D addressing capable (ch 12-15) */
   enum gpdma_ttype_e type;
   bool               free;         /* Is this channel free to use */
   uint32_t           base;         /* Channel base address */
@@ -129,241 +131,189 @@ static int gpdma_dmainterrupt(int irq, void *context, void *arg);
 
 /* Unified channel array: HPDMA1 channels first, then GPDMA1 channels.
  * Both controllers have 16 channels with identical register layout.
+ *
+ * Per-channel FIFO sizes (DS14791 Tables 8/9):
+ *   HPDMA1 ch0-11:  16 bytes, no 2D
+ *   HPDMA1 ch12-15: 64 bytes, 2D capable
+ *   GPDMA1 ch0-11:   8 bytes, no 2D
+ *   GPDMA1 ch12-15: 32 bytes, 2D capable
  */
 
 static struct gpdma_ch_s g_chan[] =
 {
 #ifdef CONFIG_STM32N6_HPDMA1
-  /* HPDMA1 channels 0-15 (AHB5, high performance) */
+  /* HPDMA1 channels 0-11 (AXI, 16-byte FIFO) */
 
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 0,
-    .irq = STM32_IRQ_HPDMA1_CH0,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(0)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 0,
+    .irq = STM32_IRQ_HPDMA1_CH0, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(0)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 1,
-    .irq = STM32_IRQ_HPDMA1_CH1,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(1)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 1,
+    .irq = STM32_IRQ_HPDMA1_CH1, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(1)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 2,
-    .irq = STM32_IRQ_HPDMA1_CH2,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(2)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 2,
+    .irq = STM32_IRQ_HPDMA1_CH2, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(2)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 3,
-    .irq = STM32_IRQ_HPDMA1_CH3,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(3)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 3,
+    .irq = STM32_IRQ_HPDMA1_CH3, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(3)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 4,
-    .irq = STM32_IRQ_HPDMA1_CH4,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(4)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 4,
+    .irq = STM32_IRQ_HPDMA1_CH4, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(4)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 5,
-    .irq = STM32_IRQ_HPDMA1_CH5,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(5)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 5,
+    .irq = STM32_IRQ_HPDMA1_CH5, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(5)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 6,
-    .irq = STM32_IRQ_HPDMA1_CH6,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(6)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 6,
+    .irq = STM32_IRQ_HPDMA1_CH6, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(6)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 7,
-    .irq = STM32_IRQ_HPDMA1_CH7,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(7)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 7,
+    .irq = STM32_IRQ_HPDMA1_CH7, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(7)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 8,
-    .irq = STM32_IRQ_HPDMA1_CH8,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(8)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 8,
+    .irq = STM32_IRQ_HPDMA1_CH8, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(8)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 9,
-    .irq = STM32_IRQ_HPDMA1_CH9,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(9)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 9,
+    .irq = STM32_IRQ_HPDMA1_CH9, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(9)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 10,
-    .irq = STM32_IRQ_HPDMA1_CH10,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(10)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 10,
+    .irq = STM32_IRQ_HPDMA1_CH10, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(10)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 11,
-    .irq = STM32_IRQ_HPDMA1_CH11,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(11)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 11,
+    .irq = STM32_IRQ_HPDMA1_CH11, .fifo_bytes = 16, .has_2d = false,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(11)
+  },
+
+  /* HPDMA1 channels 12-15 (AXI, 64-byte FIFO, 2D capable) */
+
+  {
+    .dma_instance = DMA_INST_HPDMA1, .channel = 12,
+    .irq = STM32_IRQ_HPDMA1_CH12, .fifo_bytes = 64, .has_2d = true,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(12)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 12,
-    .irq = STM32_IRQ_HPDMA1_CH12,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(12)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 13,
+    .irq = STM32_IRQ_HPDMA1_CH13, .fifo_bytes = 64, .has_2d = true,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(13)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 13,
-    .irq = STM32_IRQ_HPDMA1_CH13,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(13)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 14,
+    .irq = STM32_IRQ_HPDMA1_CH14, .fifo_bytes = 64, .has_2d = true,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(14)
   },
   {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 14,
-    .irq = STM32_IRQ_HPDMA1_CH14,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(14)
-  },
-  {
-    .dma_instance = DMA_INST_HPDMA1,
-    .channel = 15,
-    .irq = STM32_IRQ_HPDMA1_CH15,
-    .free = true,
-    .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(15)
+    .dma_instance = DMA_INST_HPDMA1, .channel = 15,
+    .irq = STM32_IRQ_HPDMA1_CH15, .fifo_bytes = 64, .has_2d = true,
+    .free = true, .base = STM32_HPDMA1_BASE + CH_BASE_OFFSET(15)
   },
 #endif /* CONFIG_STM32N6_HPDMA1 */
 
 #ifdef CONFIG_STM32N6_GPDMA1
-  /* GPDMA1 channels 0-15 (AHB1, general purpose) */
+  /* GPDMA1 channels 0-11 (AHB, 8-byte FIFO) */
 
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 0,
-    .irq = STM32_IRQ_GPDMA1_CH0,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(0)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 0,
+    .irq = STM32_IRQ_GPDMA1_CH0, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(0)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 1,
-    .irq = STM32_IRQ_GPDMA1_CH1,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(1)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 1,
+    .irq = STM32_IRQ_GPDMA1_CH1, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(1)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 2,
-    .irq = STM32_IRQ_GPDMA1_CH2,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(2)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 2,
+    .irq = STM32_IRQ_GPDMA1_CH2, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(2)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 3,
-    .irq = STM32_IRQ_GPDMA1_CH3,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(3)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 3,
+    .irq = STM32_IRQ_GPDMA1_CH3, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(3)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 4,
-    .irq = STM32_IRQ_GPDMA1_CH4,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(4)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 4,
+    .irq = STM32_IRQ_GPDMA1_CH4, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(4)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 5,
-    .irq = STM32_IRQ_GPDMA1_CH5,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(5)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 5,
+    .irq = STM32_IRQ_GPDMA1_CH5, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(5)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 6,
-    .irq = STM32_IRQ_GPDMA1_CH6,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(6)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 6,
+    .irq = STM32_IRQ_GPDMA1_CH6, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(6)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 7,
-    .irq = STM32_IRQ_GPDMA1_CH7,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(7)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 7,
+    .irq = STM32_IRQ_GPDMA1_CH7, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(7)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 8,
-    .irq = STM32_IRQ_GPDMA1_CH8,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(8)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 8,
+    .irq = STM32_IRQ_GPDMA1_CH8, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(8)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 9,
-    .irq = STM32_IRQ_GPDMA1_CH9,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(9)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 9,
+    .irq = STM32_IRQ_GPDMA1_CH9, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(9)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 10,
-    .irq = STM32_IRQ_GPDMA1_CH10,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(10)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 10,
+    .irq = STM32_IRQ_GPDMA1_CH10, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(10)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 11,
-    .irq = STM32_IRQ_GPDMA1_CH11,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(11)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 11,
+    .irq = STM32_IRQ_GPDMA1_CH11, .fifo_bytes = 8, .has_2d = false,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(11)
+  },
+
+  /* GPDMA1 channels 12-15 (AHB, 32-byte FIFO, 2D capable) */
+
+  {
+    .dma_instance = DMA_INST_GPDMA1, .channel = 12,
+    .irq = STM32_IRQ_GPDMA1_CH12, .fifo_bytes = 32, .has_2d = true,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(12)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 12,
-    .irq = STM32_IRQ_GPDMA1_CH12,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(12)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 13,
+    .irq = STM32_IRQ_GPDMA1_CH13, .fifo_bytes = 32, .has_2d = true,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(13)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 13,
-    .irq = STM32_IRQ_GPDMA1_CH13,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(13)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 14,
+    .irq = STM32_IRQ_GPDMA1_CH14, .fifo_bytes = 32, .has_2d = true,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(14)
   },
   {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 14,
-    .irq = STM32_IRQ_GPDMA1_CH14,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(14)
-  },
-  {
-    .dma_instance = DMA_INST_GPDMA1,
-    .channel = 15,
-    .irq = STM32_IRQ_GPDMA1_CH15,
-    .free = true,
-    .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(15)
+    .dma_instance = DMA_INST_GPDMA1, .channel = 15,
+    .irq = STM32_IRQ_GPDMA1_CH15, .fifo_bytes = 32, .has_2d = true,
+    .free = true, .base = STM32_GPDMA1_BASE + CH_BASE_OFFSET(15)
   },
 #endif /* CONFIG_STM32N6_GPDMA1 */
 };
@@ -509,13 +459,51 @@ static int gpdma_setup(struct gpdma_ch_s *chan,
   gpdmach_modifyreg32(chan, CH_CXCR_OFFSET, GPDMA_CXCR_PRIO_MASK,
                       cfg->priority << GPDMA_CXCR_PRIO_SHIFT);
 
-  /* Set TR1 register.  Set SSEC and DSEC (Secure source/dest) only
-   * for GPDMA1.  HPDMA1 on AHB5 may need Non-Secure transactions
-   * to access SRAM through the AXI interconnect.
+  /* Set TR1 register.  Always set SSEC and DSEC because we run in
+   * Secure state and all SRAM is Secure.  Both HPDMA1 and GPDMA1
+   * require Secure transactions to access Secure memory regions.
    */
 
-  gpdmach_putreg(chan, CH_CXTR1_OFFSET, cfg->tr1 |
-                 GPDMA_CXTR1_SSEC | GPDMA_CXTR1_DSEC);
+  reg = cfg->tr1 | GPDMA_CXTR1_SSEC | GPDMA_CXTR1_DSEC;
+
+  /* Set SAP/DAP for HPDMA1 P2M/M2P transfers.  HPDMA1 Port 0 = AXI
+   * (memory), Port 1 = AHB (peripherals).  For GPDMA1 both ports are
+   * AHB so port selection doesn't matter (leave at default 0).
+   */
+
+  if (chan->dma_instance == DMA_INST_HPDMA1)
+    {
+      if (chan->type == GPDMA_TTYPE_P2M)
+        {
+          reg |= GPDMA_CXTR1_SAP;   /* Source = AHB peripheral port */
+        }
+      else if (chan->type == GPDMA_TTYPE_M2P)
+        {
+          reg |= GPDMA_CXTR1_DAP;   /* Dest = AHB peripheral port */
+        }
+    }
+
+  /* Auto-compute burst length for M2M if caller hasn't set SBL_1/DBL_1.
+   * Optimal burst = fifo_bytes / data_width.  For P2M/M2P leave at
+   * caller's value since the peripheral may have FIFO constraints.
+   */
+
+  if (chan->type == GPDMA_TTYPE_M2M_LINEAR &&
+      (reg & (GPDMA_CXTR1_SBL_1_MASK | GPDMA_CXTR1_DBL_1_MASK)) == 0)
+    {
+      uint32_t sdw_log2 = (reg & GPDMA_CXTR1_SDW_LOG2_MASK)
+                           >> GPDMA_CXTR1_SDW_LOG2_SHIFT;
+      uint32_t data_width = 1u << sdw_log2;
+      uint32_t burst = chan->fifo_bytes / data_width;
+
+      if (burst >= 4)
+        {
+          reg |= GPDMA_CXTR1_SBL_1(burst)
+              |  GPDMA_CXTR1_DBL_1(burst);
+        }
+    }
+
+  gpdmach_putreg(chan, CH_CXTR1_OFFSET, reg);
 
   /* Assemble TR2: request selection + direction bits */
 
@@ -658,45 +646,121 @@ void weak_function arm_dma_initialize(void)
 }
 
 /****************************************************************************
- * Name: stm32_dmachannel
+ * Name: gpdma_alloc_first_free
  *
  * Description:
- *   Allocate a DMA channel. For P2M/M2P, prefer GPDMA1 channels first
- *   (lower power), fall back to HPDMA1 if GPDMA1 is full.
+ *   Scan g_chan[] for a free channel matching instance/channel constraints.
+ *   Returns the channel pointer if found, or NULL.
  *
  ****************************************************************************/
 
-DMA_HANDLE stm32_dmachannel(enum gpdma_ttype_e type)
+static struct gpdma_ch_s *gpdma_alloc_first_free(int instance,
+                                                  int ch_lo, int ch_hi)
 {
-  DMA_HANDLE handle = NULL;
-  irqstate_t flags;
   int i;
-
-  DEBUGASSERT(type != GPDMA_TTYPE_2D);
-
-  flags = enter_critical_section();
 
   for (i = 0; i < (int)DMA_NCHANNELS; i++)
     {
       struct gpdma_ch_s *chan = &g_chan[i];
 
-      if (chan->free)
+      if (chan->free &&
+          (instance == 0 || chan->dma_instance == instance) &&
+          chan->channel >= ch_lo && chan->channel <= ch_hi)
         {
-          chan->free = false;
-          chan->type = type;
-          handle = (DMA_HANDLE)chan;
-          break;
+          return chan;
         }
+    }
+
+  return NULL;
+}
+
+/****************************************************************************
+ * Name: stm32_dmachannel
+ *
+ * Description:
+ *   Allocate a DMA channel based on transfer type with type-aware selection:
+ *
+ *   P2M / M2P: Prefer GPDMA1 ch0-11 (small FIFO, low power on AHB),
+ *     fall back to HPDMA1 ch0-11, then any remaining channel.
+ *
+ *   M2M_LINEAR: Prefer GPDMA1 ch12-15 (large FIFO), fall back to
+ *     HPDMA1 ch12-15, then ch0-11 of either engine.
+ *
+ *   2D: Only channels 12-15 (has_2d == true) of either engine.
+ *
+ ****************************************************************************/
+
+DMA_HANDLE stm32_dmachannel(enum gpdma_ttype_e type)
+{
+  struct gpdma_ch_s *chan = NULL;
+  irqstate_t flags;
+
+  flags = enter_critical_section();
+
+  switch (type)
+    {
+      case GPDMA_TTYPE_P2M:
+      case GPDMA_TTYPE_M2P:
+
+        /* Prefer GPDMA1 small-FIFO channels (lower power, AHB) */
+
+        chan = gpdma_alloc_first_free(DMA_INST_GPDMA1, 0, 11);
+        if (chan == NULL)
+          {
+            chan = gpdma_alloc_first_free(DMA_INST_HPDMA1, 0, 11);
+          }
+
+        if (chan == NULL)
+          {
+            chan = gpdma_alloc_first_free(0, 0, 15);
+          }
+
+        break;
+
+      case GPDMA_TTYPE_M2M_LINEAR:
+
+        /* Prefer large-FIFO channels for bulk memory copies */
+
+        chan = gpdma_alloc_first_free(DMA_INST_GPDMA1, 12, 15);
+        if (chan == NULL)
+          {
+            chan = gpdma_alloc_first_free(DMA_INST_HPDMA1, 12, 15);
+          }
+
+        if (chan == NULL)
+          {
+            chan = gpdma_alloc_first_free(0, 0, 11);
+          }
+
+        break;
+
+      case GPDMA_TTYPE_2D:
+
+        /* 2D addressing only available on ch12-15 */
+
+        chan = gpdma_alloc_first_free(DMA_INST_GPDMA1, 12, 15);
+        if (chan == NULL)
+          {
+            chan = gpdma_alloc_first_free(DMA_INST_HPDMA1, 12, 15);
+          }
+
+        break;
+    }
+
+  if (chan != NULL)
+    {
+      chan->free = false;
+      chan->type = type;
     }
 
   leave_critical_section(flags);
 
-  if (handle == NULL)
+  if (chan == NULL)
     {
       dmaerr("No available DMA channel for transfer type=%d\n", type);
     }
 
-  return handle;
+  return (DMA_HANDLE)chan;
 }
 
 /****************************************************************************

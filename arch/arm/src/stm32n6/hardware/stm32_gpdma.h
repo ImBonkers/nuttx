@@ -163,6 +163,7 @@
 #define GPDMA_CXTR1_SINC              (1 << 3)  /* Source incrementing burst */
 #define GPDMA_CXTR1_SBL_1_SHIFT       (4)
 #define GPDMA_CXTR1_SBL_1_MASK        (0x3f << GPDMA_CXTR1_SBL_1_SHIFT)
+#define GPDMA_CXTR1_SBL_1(n)          (((n)-1) << GPDMA_CXTR1_SBL_1_SHIFT)
 #define GPDMA_CXTR1_PAM_SHIFT         (11)
 #define GPDMA_CXTR1_PAM_MASK          (3 << GPDMA_CXTR1_PAM_SHIFT)
 #define GPDMA_CXTR1_SBX               (1 << 13) /* Source byte exchange */
@@ -178,6 +179,7 @@
 #define GPDMA_CXTR1_DINC              (1 << 19) /* Destination incrementing */
 #define GPDMA_CXTR1_DBL_1_SHIFT       (20)
 #define GPDMA_CXTR1_DBL_1_MASK        (0x3f << GPDMA_CXTR1_DBL_1_SHIFT)
+#define GPDMA_CXTR1_DBL_1(n)          (((n)-1) << GPDMA_CXTR1_DBL_1_SHIFT)
 #define GPDMA_CXTR1_DBX               (1 << 26) /* Destination byte exchange */
 #define GPDMA_CXTR1_DHX               (1 << 27) /* Destination half-word exchange */
 #define GPDMA_CXTR1_DAP               (1 << 30) /* Destination allocated port */
