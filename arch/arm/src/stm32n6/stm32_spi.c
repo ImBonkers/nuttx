@@ -206,12 +206,26 @@ struct stm32_spidev_s
   enum spi_config_e config;      /* full/half duplex, simplex transmit/read only */
 #ifdef CONFIG_STM32N6_SPI_DMA
   bool             candma;       /* DMA enabled for this instance */
-  /* rxresult removed — polled DMA wait used instead of ISR callback */
   uint8_t          rxdma_req;    /* RX DMA request number */
   uint8_t          txdma_req;    /* TX DMA request number */
   DMA_HANDLE       rxdma;        /* RX DMA channel handle */
   DMA_HANDLE       txdma;        /* TX DMA channel handle */
-  /* rxsem removed — polled DMA wait used instead of semaphore */
+
+  /* Cache-line-aligned DMA buffers.  DMA writes bypass the CPU cache,
+   * so up_invalidate_dcache() is needed after RX DMA.  That function
+   * uses DCCIMVAC (clean+invalidate) on unaligned edge cache lines,
+   * which can overwrite DMA data with stale cached data when the
+   * caller's buffer shares cache lines with dirty stack/heap variables.
+   * Using aligned buffers here guarantees only DCIMVAC (pure invalidate)
+   * is used, avoiding that corruption.  Transfers larger than
+   * SPI_DMA_BUFSIZE fall back to polling.
+   */
+
+#  define SPI_DMA_BUFSIZE_ALIGNED  256
+  uint8_t rxdma_buf[SPI_DMA_BUFSIZE_ALIGNED]
+    __attribute__((aligned(32)));
+  uint8_t txdma_buf[SPI_DMA_BUFSIZE_ALIGNED]
+    __attribute__((aligned(32)));
 #endif
 };
 
@@ -655,8 +669,6 @@ static struct stm32_spidev_s g_spi6dev =
 /* Static dummy buffers for DMA when tx/rx buffer is NULL */
 
 #ifdef CONFIG_STM32N6_SPI_DMA
-static uint16_t spi_txdummy = 0xffff;
-static uint16_t spi_rxdummy;
 #endif
 
 /****************************************************************************
@@ -1639,6 +1651,7 @@ static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
   struct stm32_gpdma_cfg_s rxcfg;
   struct stm32_gpdma_cfg_s txcfg;
   size_t nbytes;
+  size_t nbytes_aligned;
   uint32_t sdw;
   uint32_t ddw;
   int ret;
@@ -1660,58 +1673,60 @@ static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
       nbytes = nwords;
     }
 
-  /* Build RX DMA config: peripheral (RXDR) → memory */
+  /* If the transfer exceeds the aligned DMA buffer, fall back to
+   * polling to avoid cache coherency complexity with large buffers.
+   */
 
-  memset(&rxcfg, 0, sizeof(rxcfg));
-  rxcfg.src_addr = priv->spibase + STM32_SPI_RXDR_OFFSET;
-  rxcfg.tr1      = sdw | ddw;
-
-  if (rxbuffer != NULL)
+  if (nbytes > SPI_DMA_BUFSIZE_ALIGNED)
     {
-      rxcfg.dest_addr = (uint32_t)(uintptr_t)rxbuffer;
-      rxcfg.tr1      |= GPDMA_CXTR1_DINC;
-    }
-  else
-    {
-      rxcfg.dest_addr = (uint32_t)(uintptr_t)&spi_rxdummy;
+      spi_exchange_nodma(dev, txbuffer, rxbuffer, nwords);
+      return;
     }
 
-  rxcfg.request    = GPDMA_CXTR2_REQSEL(priv->rxdma_req);
-  rxcfg.ntransfers = nbytes;
-
-  /* Build TX DMA config: memory → peripheral (TXDR) */
-
-  memset(&txcfg, 0, sizeof(txcfg));
-  txcfg.dest_addr = priv->spibase + STM32_SPI_TXDR_OFFSET;
-  txcfg.tr1       = sdw | ddw;
+  /* Copy TX data into the aligned DMA buffer.  The aligned buffer
+   * guarantees that up_clean_dcache / up_invalidate_dcache never need
+   * DCCIMVAC on unaligned edge cache lines, which would overwrite
+   * DMA-received data with stale cached data (write-back cache bug).
+   */
 
   if (txbuffer != NULL)
     {
-      txcfg.src_addr = (uint32_t)(uintptr_t)txbuffer;
-      txcfg.tr1     |= GPDMA_CXTR1_SINC;
+      memcpy(priv->txdma_buf, txbuffer, nbytes);
     }
   else
     {
-      txcfg.src_addr = (uint32_t)(uintptr_t)&spi_txdummy;
+      memset(priv->txdma_buf, 0xff, nbytes);
     }
 
+  /* Round up to cache line boundary for aligned invalidation */
+
+  nbytes_aligned = (nbytes + 31) & ~31u;
+
+  /* Build RX DMA config: peripheral (RXDR) → aligned buffer */
+
+  memset(&rxcfg, 0, sizeof(rxcfg));
+  rxcfg.src_addr   = priv->spibase + STM32_SPI_RXDR_OFFSET;
+  rxcfg.dest_addr  = (uint32_t)(uintptr_t)priv->rxdma_buf;
+  rxcfg.tr1        = sdw | ddw | GPDMA_CXTR1_DINC;
+  rxcfg.request    = GPDMA_CXTR2_REQSEL(priv->rxdma_req);
+  rxcfg.ntransfers = nbytes;
+
+  /* Build TX DMA config: aligned buffer → peripheral (TXDR) */
+
+  memset(&txcfg, 0, sizeof(txcfg));
+  txcfg.src_addr   = (uint32_t)(uintptr_t)priv->txdma_buf;
+  txcfg.dest_addr  = priv->spibase + STM32_SPI_TXDR_OFFSET;
+  txcfg.tr1        = sdw | ddw | GPDMA_CXTR1_SINC;
   txcfg.request    = GPDMA_CXTR2_REQSEL(priv->txdma_req)
                    | GPDMA_CXTR2_DREQ;
   txcfg.ntransfers = nbytes;
 
-  /* Cache maintenance: clean TX buffer, invalidate RX buffer */
+  /* Cache maintenance on aligned buffers — no DCCIMVAC edge issue */
 
-  if (txbuffer != NULL)
-    {
-      up_clean_dcache((uintptr_t)txbuffer,
-                      (uintptr_t)txbuffer + nbytes);
-    }
-
-  if (rxbuffer != NULL)
-    {
-      up_invalidate_dcache((uintptr_t)rxbuffer,
-                           (uintptr_t)rxbuffer + nbytes);
-    }
+  up_clean_dcache((uintptr_t)priv->txdma_buf,
+                  (uintptr_t)priv->txdma_buf + nbytes_aligned);
+  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
+                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
 
   /* Disable SPI DMA enables first, then SPE, then clear all flags.
    * DMA channels are stopped/reconfigured inside stm32_dmasetup below.
@@ -1725,18 +1740,12 @@ static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
              SPI_IFCR_OVRC | SPI_IFCR_CRCEC | SPI_IFCR_TIFREC |
              SPI_IFCR_MODFC | SPI_IFCR_SUSPC);
 
-  /* Configure DMA channels (writes registers but does not enable).
-   * This calls gpdma_ch_disable internally to reset channel state.
+  /* Configure and start DMA channels.  Polled wait avoids NVIC/ISR
+   * races that cause intermittent failures on repeated transfers.
    */
 
   stm32_dmasetup(priv->rxdma, &rxcfg);
   stm32_dmasetup(priv->txdma, &txcfg);
-
-  /* Start DMA channels with no callback — we use polled wait instead
-   * of interrupt-based notification.  This avoids NVIC/ISR races that
-   * cause intermittent failures on repeated transfers.
-   */
-
   stm32_dmastart(priv->rxdma, NULL, NULL, false);
   stm32_dmastart(priv->txdma, NULL, NULL, false);
 
@@ -1764,9 +1773,7 @@ static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
              spi_getreg(priv, STM32_SPI_SR_OFFSET));
     }
 
-  /* Stop DMA channels and reset SPI.  Order: stop DMA, clear all
-   * SPI flags, disable SPE, clear DMA enables.
-   */
+  /* Stop DMA channels and reset SPI */
 
   stm32_dmastop(priv->rxdma);
   stm32_dmastop(priv->txdma);
@@ -1779,12 +1786,14 @@ static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
   spi_modifyreg(priv, STM32_SPI_CFG1_OFFSET,
                 SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN, 0);
 
-  /* Final cache invalidate so CPU sees DMA-written data */
+  /* Invalidate RX aligned buffer and copy to caller's buffer */
+
+  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
+                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
 
   if (rxbuffer != NULL)
     {
-      up_invalidate_dcache((uintptr_t)rxbuffer,
-                           (uintptr_t)rxbuffer + nbytes);
+      memcpy(rxbuffer, priv->rxdma_buf, nbytes);
     }
 }
 #endif /* CONFIG_STM32N6_SPI_DMA */

@@ -1012,6 +1012,14 @@ int stm32_dmapollwait(DMA_HANDLE handle, uint32_t timeout_us)
       if (sr & GPDMA_CXSR_TCF)
         {
           gpdmach_putreg(chan, CH_CXFCR_OFFSET, ~0);
+
+          /* DSB ensures all DMA writes to memory are visible to the CPU
+           * before the caller reads the destination buffer or invalidates
+           * D-cache.  Without this, the AXI interconnect may still have
+           * in-flight writes from the DMA controller.
+           */
+
+          __asm volatile ("dsb sy" ::: "memory");
           return OK;
         }
 
