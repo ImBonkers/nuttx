@@ -74,6 +74,12 @@
 #include "stm32_gpio.h"
 #include "stm32_spi.h"
 
+#ifdef CONFIG_STM32N6_SPI_DMA
+#  include <nuttx/semaphore.h>
+#  include <nuttx/cache.h>
+#  include "stm32_dma.h"
+#endif
+
 #if defined(CONFIG_STM32N6_SPI1) || defined(CONFIG_STM32N6_SPI2) || \
     defined(CONFIG_STM32N6_SPI3) || defined(CONFIG_STM32N6_SPI4) || \
     defined(CONFIG_STM32N6_SPI5) || defined(CONFIG_STM32N6_SPI6)
@@ -88,6 +94,42 @@
 
 #ifdef CONFIG_STM32N6_SPI_INTERRUPTS
 #  error "Interrupt driven SPI not yet supported"
+#endif
+
+/* SPI DMA configuration */
+
+#ifdef CONFIG_STM32N6_SPI_DMA
+#  ifndef CONFIG_STM32N6_SPI_DMATHRESHOLD
+#    define CONFIG_STM32N6_SPI_DMATHRESHOLD 4
+#  endif
+#  define SPI_DMA_THRESHOLD CONFIG_STM32N6_SPI_DMATHRESHOLD
+#endif
+
+/* DMA request numbers per SPI instance */
+
+#ifdef CONFIG_STM32N6_SPI1_DMA
+#  define SPI1_RXDMA_REQ  GPDMA_REQ_SPI1_RX
+#  define SPI1_TXDMA_REQ  GPDMA_REQ_SPI1_TX
+#endif
+#ifdef CONFIG_STM32N6_SPI2_DMA
+#  define SPI2_RXDMA_REQ  GPDMA_REQ_SPI2_RX
+#  define SPI2_TXDMA_REQ  GPDMA_REQ_SPI2_TX
+#endif
+#ifdef CONFIG_STM32N6_SPI3_DMA
+#  define SPI3_RXDMA_REQ  GPDMA_REQ_SPI3_RX
+#  define SPI3_TXDMA_REQ  GPDMA_REQ_SPI3_TX
+#endif
+#ifdef CONFIG_STM32N6_SPI4_DMA
+#  define SPI4_RXDMA_REQ  GPDMA_REQ_SPI4_RX
+#  define SPI4_TXDMA_REQ  GPDMA_REQ_SPI4_TX
+#endif
+#ifdef CONFIG_STM32N6_SPI5_DMA
+#  define SPI5_RXDMA_REQ  GPDMA_REQ_SPI5_RX
+#  define SPI5_TXDMA_REQ  GPDMA_REQ_SPI5_TX
+#endif
+#ifdef CONFIG_STM32N6_SPI6_DMA
+#  define SPI6_RXDMA_REQ  GPDMA_REQ_SPI6_RX
+#  define SPI6_TXDMA_REQ  GPDMA_REQ_SPI6_TX
 #endif
 
 /* Kernel clock configuration
@@ -162,6 +204,15 @@ struct stm32_spidev_s
   struct pm_callback_s pm_cb;    /* PM callbacks */
 #endif
   enum spi_config_e config;      /* full/half duplex, simplex transmit/read only */
+#ifdef CONFIG_STM32N6_SPI_DMA
+  bool             candma;       /* DMA enabled for this instance */
+  /* rxresult removed — polled DMA wait used instead of ISR callback */
+  uint8_t          rxdma_req;    /* RX DMA request number */
+  uint8_t          txdma_req;    /* TX DMA request number */
+  DMA_HANDLE       rxdma;        /* RX DMA channel handle */
+  DMA_HANDLE       txdma;        /* TX DMA channel handle */
+  /* rxsem removed — polled DMA wait used instead of semaphore */
+#endif
 };
 
 /****************************************************************************
@@ -199,6 +250,14 @@ static int         spi_hwfeatures(struct spi_dev_s *dev,
                                   spi_hwfeatures_t features);
 #endif
 static uint32_t    spi_send(struct spi_dev_s *dev, uint32_t wd);
+static void        spi_exchange_nodma(struct spi_dev_s *dev,
+                                      const void *txbuffer, void *rxbuffer,
+                                      size_t nwords);
+#ifdef CONFIG_STM32N6_SPI_DMA
+static void        spi_exchange_dma(struct spi_dev_s *dev,
+                                    const void *txbuffer, void *rxbuffer,
+                                    size_t nwords);
+#endif
 static void        spi_exchange(struct spi_dev_s *dev,
                                 const void *txbuffer, void *rxbuffer,
                                 size_t nwords);
@@ -280,6 +339,11 @@ static struct stm32_spidev_s g_spi1dev =
 #else
   .config   = FULL_DUPLEX,
 #endif
+#ifdef CONFIG_STM32N6_SPI1_DMA
+  .candma    = true,
+  .rxdma_req = SPI1_RXDMA_REQ,
+  .txdma_req = SPI1_TXDMA_REQ,
+#endif
 };
 #endif /* CONFIG_STM32N6_SPI1 */
 
@@ -335,6 +399,11 @@ static struct stm32_spidev_s g_spi2dev =
   .config   = CONFIG_STM32N6_SPI2_COMMTYPE,
 #else
   .config   = FULL_DUPLEX,
+#endif
+#ifdef CONFIG_STM32N6_SPI2_DMA
+  .candma    = true,
+  .rxdma_req = SPI2_RXDMA_REQ,
+  .txdma_req = SPI2_TXDMA_REQ,
 #endif
 };
 #endif /* CONFIG_STM32N6_SPI2 */
@@ -392,6 +461,11 @@ static struct stm32_spidev_s g_spi3dev =
 #else
   .config   = FULL_DUPLEX,
 #endif
+#ifdef CONFIG_STM32N6_SPI3_DMA
+  .candma    = true,
+  .rxdma_req = SPI3_RXDMA_REQ,
+  .txdma_req = SPI3_TXDMA_REQ,
+#endif
 };
 #endif /* CONFIG_STM32N6_SPI3 */
 
@@ -447,6 +521,11 @@ static struct stm32_spidev_s g_spi4dev =
   .config   = CONFIG_STM32N6_SPI4_COMMTYPE,
 #else
   .config   = FULL_DUPLEX,
+#endif
+#ifdef CONFIG_STM32N6_SPI4_DMA
+  .candma    = true,
+  .rxdma_req = SPI4_RXDMA_REQ,
+  .txdma_req = SPI4_TXDMA_REQ,
 #endif
 };
 #endif /* CONFIG_STM32N6_SPI4 */
@@ -504,6 +583,11 @@ static struct stm32_spidev_s g_spi5dev =
 #else
   .config   = FULL_DUPLEX,
 #endif
+#ifdef CONFIG_STM32N6_SPI5_DMA
+  .candma    = true,
+  .rxdma_req = SPI5_RXDMA_REQ,
+  .txdma_req = SPI5_TXDMA_REQ,
+#endif
 };
 #endif /* CONFIG_STM32N6_SPI5 */
 
@@ -560,8 +644,20 @@ static struct stm32_spidev_s g_spi6dev =
 #else
   .config   = FULL_DUPLEX,
 #endif
+#ifdef CONFIG_STM32N6_SPI6_DMA
+  .candma    = true,
+  .rxdma_req = SPI6_RXDMA_REQ,
+  .txdma_req = SPI6_TXDMA_REQ,
+#endif
 };
 #endif /* CONFIG_STM32N6_SPI6 */
+
+/* Static dummy buffers for DMA when tx/rx buffer is NULL */
+
+#ifdef CONFIG_STM32N6_SPI_DMA
+static uint16_t spi_txdummy = 0xffff;
+static uint16_t spi_rxdummy;
+#endif
 
 /****************************************************************************
  * Private Functions
@@ -1397,28 +1493,15 @@ static uint32_t spi_send(struct spi_dev_s *dev, uint32_t wd)
 }
 
 /****************************************************************************
- * Name: spi_exchange (polling, no DMA)
+ * Name: spi_exchange_nodma (polling)
  *
  * Description:
- *   Exchange a block of data on SPI without using DMA
- *
- * Input Parameters:
- *   dev      - Device-specific state data
- *   txbuffer - A pointer to the buffer of data to be sent
- *   rxbuffer - A pointer to a buffer in which to receive data
- *   nwords   - the length of data to be exchanged in units of words.
- *              The wordsize is determined by the number of bits-per-word
- *              selected for the SPI interface.  If nbits <= 8, the data is
- *              packed into uint8_t's; if nbits >8, the data is packed into
- *              uint16_t's
- *
- * Returned Value:
- *   None
+ *   Exchange a block of data on SPI using polling (no DMA).
  *
  ****************************************************************************/
 
-static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
-                         void *rxbuffer, size_t nwords)
+static void spi_exchange_nodma(struct spi_dev_s *dev, const void *txbuffer,
+                               void *rxbuffer, size_t nwords)
 {
   struct stm32_spidev_s *priv = (struct stm32_spidev_s *)dev;
   size_t txcount = nwords;
@@ -1533,6 +1616,207 @@ static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
   spi_putreg(priv, STM32_SPI_IFCR_OFFSET,
              SPI_IFCR_EOTC | SPI_IFCR_TXTFC);
   spi_enable(priv, false);
+}
+
+/* Note: DMA RX completion uses stm32_dmapollwait() instead of
+ * interrupt-based semaphore to avoid NVIC stale pending races on
+ * repeated transfers.
+ */
+
+/****************************************************************************
+ * Name: spi_exchange_dma
+ *
+ * Description:
+ *   Exchange a block of data on SPI using DMA.
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_STM32N6_SPI_DMA
+static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
+                             void *rxbuffer, size_t nwords)
+{
+  struct stm32_spidev_s *priv = (struct stm32_spidev_s *)dev;
+  struct stm32_gpdma_cfg_s rxcfg;
+  struct stm32_gpdma_cfg_s txcfg;
+  size_t nbytes;
+  uint32_t sdw;
+  uint32_t ddw;
+  int ret;
+
+  DEBUGASSERT(priv && priv->spibase);
+
+  /* Determine DMA data width and byte count based on frame size */
+
+  if (priv->nbits > 8)
+    {
+      sdw = GPDMA_CXTR1_SDW_LOG2_HW;
+      ddw = GPDMA_CXTR1_DDW_LOG2_HW;
+      nbytes = nwords * 2;
+    }
+  else
+    {
+      sdw = GPDMA_CXTR1_SDW_LOG2_BYTE;
+      ddw = GPDMA_CXTR1_DDW_LOG2_BYTE;
+      nbytes = nwords;
+    }
+
+  /* Build RX DMA config: peripheral (RXDR) → memory */
+
+  memset(&rxcfg, 0, sizeof(rxcfg));
+  rxcfg.src_addr = priv->spibase + STM32_SPI_RXDR_OFFSET;
+  rxcfg.tr1      = sdw | ddw;
+
+  if (rxbuffer != NULL)
+    {
+      rxcfg.dest_addr = (uint32_t)(uintptr_t)rxbuffer;
+      rxcfg.tr1      |= GPDMA_CXTR1_DINC;
+    }
+  else
+    {
+      rxcfg.dest_addr = (uint32_t)(uintptr_t)&spi_rxdummy;
+    }
+
+  rxcfg.request    = GPDMA_CXTR2_REQSEL(priv->rxdma_req);
+  rxcfg.ntransfers = nbytes;
+
+  /* Build TX DMA config: memory → peripheral (TXDR) */
+
+  memset(&txcfg, 0, sizeof(txcfg));
+  txcfg.dest_addr = priv->spibase + STM32_SPI_TXDR_OFFSET;
+  txcfg.tr1       = sdw | ddw;
+
+  if (txbuffer != NULL)
+    {
+      txcfg.src_addr = (uint32_t)(uintptr_t)txbuffer;
+      txcfg.tr1     |= GPDMA_CXTR1_SINC;
+    }
+  else
+    {
+      txcfg.src_addr = (uint32_t)(uintptr_t)&spi_txdummy;
+    }
+
+  txcfg.request    = GPDMA_CXTR2_REQSEL(priv->txdma_req)
+                   | GPDMA_CXTR2_DREQ;
+  txcfg.ntransfers = nbytes;
+
+  /* Cache maintenance: clean TX buffer, invalidate RX buffer */
+
+  if (txbuffer != NULL)
+    {
+      up_clean_dcache((uintptr_t)txbuffer,
+                      (uintptr_t)txbuffer + nbytes);
+    }
+
+  if (rxbuffer != NULL)
+    {
+      up_invalidate_dcache((uintptr_t)rxbuffer,
+                           (uintptr_t)rxbuffer + nbytes);
+    }
+
+  /* Disable SPI DMA enables first, then SPE, then clear all flags.
+   * DMA channels are stopped/reconfigured inside stm32_dmasetup below.
+   */
+
+  spi_modifyreg(priv, STM32_SPI_CFG1_OFFSET,
+                SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN, 0);
+  spi_enable(priv, false);
+  spi_putreg(priv, STM32_SPI_IFCR_OFFSET,
+             SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_UDRC |
+             SPI_IFCR_OVRC | SPI_IFCR_CRCEC | SPI_IFCR_TIFREC |
+             SPI_IFCR_MODFC | SPI_IFCR_SUSPC);
+
+  /* Configure DMA channels (writes registers but does not enable).
+   * This calls gpdma_ch_disable internally to reset channel state.
+   */
+
+  stm32_dmasetup(priv->rxdma, &rxcfg);
+  stm32_dmasetup(priv->txdma, &txcfg);
+
+  /* Start DMA channels with no callback — we use polled wait instead
+   * of interrupt-based notification.  This avoids NVIC/ISR races that
+   * cause intermittent failures on repeated transfers.
+   */
+
+  stm32_dmastart(priv->rxdma, NULL, NULL, false);
+  stm32_dmastart(priv->txdma, NULL, NULL, false);
+
+  /* Set TSIZE, enable DMA in SPI, then SPE and CSTART */
+
+  spi_putreg(priv, STM32_SPI_CR2_OFFSET, nwords & SPI_CR2_TSIZE_MASK);
+  spi_modifyreg(priv, STM32_SPI_CFG1_OFFSET, 0,
+                SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN);
+
+  spi_enable(priv, true);
+  spi_modifyreg(priv, STM32_SPI_CR1_OFFSET, 0, SPI_CR1_CSTART);
+
+  /* Poll for RX DMA completion — 10ms is generous for SPI transfers.
+   * At 1MHz SPI clock, 256 bytes takes ~2ms.
+   */
+
+  ret = stm32_dmapollwait(priv->rxdma, 10000);
+
+  if (ret < 0)
+    {
+      spierr("DMA %s! rxres=%zu txres=%zu SR=0x%08" PRIx32 "\n",
+             ret == -ETIMEDOUT ? "timeout" : "error",
+             stm32_dmaresidual(priv->rxdma),
+             stm32_dmaresidual(priv->txdma),
+             spi_getreg(priv, STM32_SPI_SR_OFFSET));
+    }
+
+  /* Stop DMA channels and reset SPI.  Order: stop DMA, clear all
+   * SPI flags, disable SPE, clear DMA enables.
+   */
+
+  stm32_dmastop(priv->rxdma);
+  stm32_dmastop(priv->txdma);
+
+  spi_putreg(priv, STM32_SPI_IFCR_OFFSET,
+             SPI_IFCR_EOTC | SPI_IFCR_TXTFC | SPI_IFCR_UDRC |
+             SPI_IFCR_OVRC | SPI_IFCR_CRCEC | SPI_IFCR_TIFREC |
+             SPI_IFCR_MODFC | SPI_IFCR_SUSPC);
+  spi_enable(priv, false);
+  spi_modifyreg(priv, STM32_SPI_CFG1_OFFSET,
+                SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN, 0);
+
+  /* Final cache invalidate so CPU sees DMA-written data */
+
+  if (rxbuffer != NULL)
+    {
+      up_invalidate_dcache((uintptr_t)rxbuffer,
+                           (uintptr_t)rxbuffer + nbytes);
+    }
+}
+#endif /* CONFIG_STM32N6_SPI_DMA */
+
+/****************************************************************************
+ * Name: spi_exchange
+ *
+ * Description:
+ *   Exchange dispatcher: routes to DMA or polling based on configuration
+ *   and transfer size.
+ *
+ ****************************************************************************/
+
+static void spi_exchange(struct spi_dev_s *dev, const void *txbuffer,
+                         void *rxbuffer, size_t nwords)
+{
+#ifdef CONFIG_STM32N6_SPI_DMA
+  struct stm32_spidev_s *priv = (struct stm32_spidev_s *)dev;
+
+  if (priv->candma &&
+      priv->rxdma != NULL &&
+      priv->txdma != NULL &&
+      nwords >= SPI_DMA_THRESHOLD &&
+      !up_interrupt_context())
+    {
+      spi_exchange_dma(dev, txbuffer, rxbuffer, nwords);
+    }
+  else
+#endif
+    {
+      spi_exchange_nodma(dev, txbuffer, rxbuffer, nwords);
+    }
 }
 
 /****************************************************************************
@@ -1856,6 +2140,37 @@ static void spi_bus_initialize(struct stm32_spidev_s *priv)
    * manages SPE: disable → set TSIZE → enable → CSTART → transfer → EOT →
    * disable.  This matches the ST HAL approach for STM32N6.
    */
+
+#ifdef CONFIG_STM32N6_SPI_DMA
+  /* Allocate DMA channels if this SPI instance has DMA enabled */
+
+  if (priv->candma)
+    {
+      priv->rxdma = stm32_dmachannel(GPDMA_TTYPE_P2M);
+      priv->txdma = stm32_dmachannel(GPDMA_TTYPE_M2P);
+
+      if (priv->rxdma == NULL || priv->txdma == NULL)
+        {
+          /* Graceful fallback to polling */
+
+          if (priv->rxdma)
+            {
+              stm32_dmafree(priv->rxdma);
+            }
+
+          if (priv->txdma)
+            {
+              stm32_dmafree(priv->txdma);
+            }
+
+          priv->rxdma  = NULL;
+          priv->txdma  = NULL;
+          priv->candma = false;
+          spiwarn("SPI DMA channels unavailable, using polling\n");
+        }
+      /* No semaphore init needed — polled DMA wait is used */
+    }
+#endif
 
 #ifdef CONFIG_PM
   /* Register to receive power management callbacks */

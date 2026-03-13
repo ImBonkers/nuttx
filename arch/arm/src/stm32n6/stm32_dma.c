@@ -31,11 +31,13 @@
 #include <assert.h>
 #include <debug.h>
 #include <errno.h>
+#include <inttypes.h>
 
 #include <nuttx/irq.h>
 #include <nuttx/arch.h>
 
 #include "arm_internal.h"
+#include "nvic.h"
 #include "stm32_dma.h"
 #include "hardware/stm32_gpdma.h"
 #include "hardware/stm32n6xxx_memorymap.h"
@@ -360,15 +362,28 @@ static int gpdma_dmainterrupt(int irq, void *context, void *arg)
 
   status = (gpdmach_getreg(chan, CH_CXSR_OFFSET) >> 8) & 0x7f;
 
-  /* Clear all flags */
-
-  gpdmach_putreg(chan, CH_CXFCR_OFFSET, ~0);
-
-  /* Invoke the callback */
-
   if (chan->callback)
     {
-      chan->callback(chan, (uint8_t)status, chan->arg);
+      /* Interrupt-based mode: clear flags + DSB to prevent NVIC
+       * re-latch, then invoke the callback if status is non-zero.
+       */
+
+      gpdmach_putreg(chan, CH_CXFCR_OFFSET, ~0);
+      __asm volatile ("dsb sy" ::: "memory");
+
+      if (status != 0)
+        {
+          chan->callback(chan, (uint8_t)status, chan->arg);
+        }
+    }
+  else
+    {
+      /* Polled mode: disable interrupt enables to stop further IRQs,
+       * but do NOT clear flags — the polled reader needs to see TCF.
+       */
+
+      gpdmach_modifyreg32(chan, CH_CXCR_OFFSET, GPDMA_CXCR_ALLINTS, 0);
+      __asm volatile ("dsb sy" ::: "memory");
     }
 
   return 0;
@@ -384,31 +399,35 @@ static int gpdma_dmainterrupt(int irq, void *context, void *arg)
 
 static void gpdma_ch_abort(struct gpdma_ch_s *chan)
 {
+  int timeout;
+
   if ((gpdmach_getreg(chan, CH_CXCR_OFFSET) & GPDMA_CXCR_EN) == 0)
     {
       return;
     }
 
-  /* 1. Set SUSP bit */
+  /* Suspend the channel first.  For idle channels (after TC) this
+   * completes immediately.  For active channels it waits for the
+   * current beat to finish.
+   */
 
-  gpdmach_putreg(chan, CH_CXCR_OFFSET, GPDMA_CXCR_SUSP);
+  gpdmach_modifyreg32(chan, CH_CXCR_OFFSET, 0, GPDMA_CXCR_SUSP);
 
-  /* 2. Wait for SUSPF */
-
+  timeout = 100000;
   while ((gpdmach_getreg(chan, CH_CXSR_OFFSET) & GPDMA_CXSR_SUSPF) == 0)
     {
+      if (--timeout == 0)
+        {
+          break;
+        }
     }
 
-  /* 3. Reset channel */
+  /* Disable the channel by clearing CxCR entirely.  This avoids the
+   * RESET operation which clears CxCIDCFGR and other per-channel
+   * security state that is difficult to fully restore.
+   */
 
-  gpdmach_putreg(chan, CH_CXCR_OFFSET, GPDMA_CXCR_RESET);
-
-  /* 4. Wait for EN and SUSP bits to clear */
-
-  while ((gpdmach_getreg(chan, CH_CXCR_OFFSET) &
-         (GPDMA_CXCR_EN | GPDMA_CXCR_SUSP)) != 0)
-    {
-    }
+  gpdmach_putreg(chan, CH_CXCR_OFFSET, 0);
 }
 
 /****************************************************************************
@@ -421,6 +440,8 @@ static void gpdma_ch_abort(struct gpdma_ch_s *chan)
 
 static void gpdma_ch_disable(struct gpdma_ch_s *chan)
 {
+  int ext_irq;
+
   DEBUGASSERT(chan != NULL);
 
   gpdma_ch_abort(chan);
@@ -428,7 +449,33 @@ static void gpdma_ch_disable(struct gpdma_ch_s *chan)
   /* Disable and clear all interrupts */
 
   gpdmach_modifyreg32(chan, CH_CXCR_OFFSET, GPDMA_CXCR_ALLINTS, 0);
-  gpdmach_modifyreg32(chan, CH_CXFCR_OFFSET, 0, ~0);
+  gpdmach_putreg(chan, CH_CXFCR_OFFSET, ~0);
+
+  /* Clear NVIC pending bit for this channel's IRQ.  After a completed
+   * transfer, the DMA hardware may latch a new interrupt between the
+   * ISR clearing CxFCR and the channel being disabled.  Without this,
+   * re-enabling the channel causes a stale interrupt to fire immediately,
+   * reading empty status and consuming the semaphore before the real
+   * transfer completes.
+   */
+
+  ext_irq = chan->irq - STM32_IRQ_FIRST;
+  putreg32(1 << (ext_irq & 31), NVIC_IRQ_CLRPEND(ext_irq));
+
+  /* Restore CxCIDCFGR — channel RESET clears this register.
+   * Without CID filtering, the DMA channel may present CID=0 which
+   * can cause RIFSC to block peripheral access on subsequent transfers.
+   * CFEN=1, SCID=1 (Cortex-M55 CID).
+   */
+
+  gpdmach_putreg(chan, CH_CXCIDCFGR_OFFSET, 0x11);
+
+  /* Ensure all register writes are committed and pipeline is flushed
+   * before the channel can be reconfigured for the next transfer.
+   */
+
+  __asm volatile ("dsb sy" ::: "memory");
+  __asm volatile ("isb sy" ::: "memory");
 }
 
 /****************************************************************************
@@ -901,23 +948,22 @@ void stm32_dmastart(DMA_HANDLE handle, dma_callback_t callback, void *arg,
   chan->callback = callback;
   chan->arg = arg;
 
-  /* Build CR value: enable + interrupt bits */
+  /* Build CR value: enable + interrupt bits.
+   * Interrupt enables are ALWAYS set — the STM32N6 GPDMA appears to
+   * require TCIE for the channel to actually run the data transfer.
+   */
 
   cr = gpdmach_getreg(chan, CH_CXCR_OFFSET);
   cr |= GPDMA_CXCR_EN;
 
   if (chan->cfg.mode & GPDMACFG_MODE_CIRC)
     {
-      /* Circular mode: always TC, optionally HT */
-
       cr |= ((half ? GPDMA_CXCR_HTIE : 0) |
               GPDMA_CXCR_TCIE |
               GPDMA_CXCR_DTEIE);
     }
   else
     {
-      /* Normal mode: either HT or TC, plus all error types */
-
       cr |= (half ? (GPDMA_CXCR_HTIE | GPDMA_CXCR_DTEIE |
                       GPDMA_CXCR_USEIE | GPDMA_CXCR_ULEIE) :
                      (GPDMA_CXCR_TCIE | GPDMA_CXCR_DTEIE |
@@ -939,6 +985,47 @@ void stm32_dmastop(DMA_HANDLE handle)
 {
   struct gpdma_ch_s *chan = (struct gpdma_ch_s *)handle;
   gpdma_ch_disable(chan);
+}
+
+/****************************************************************************
+ * Name: stm32_dmapollwait
+ *
+ * Description:
+ *   Poll for DMA transfer completion (TCF).  Use this instead of
+ *   interrupt-based notification for short transfers to avoid NVIC
+ *   races.  The DMA channel must have been started with callback=NULL
+ *   (no interrupt enables).
+ *
+ ****************************************************************************/
+
+int stm32_dmapollwait(DMA_HANDLE handle, uint32_t timeout_us)
+{
+  struct gpdma_ch_s *chan = (struct gpdma_ch_s *)handle;
+  uint32_t sr;
+
+  DEBUGASSERT(handle != NULL);
+
+  while (timeout_us > 0)
+    {
+      sr = gpdmach_getreg(chan, CH_CXSR_OFFSET);
+
+      if (sr & GPDMA_CXSR_TCF)
+        {
+          gpdmach_putreg(chan, CH_CXFCR_OFFSET, ~0);
+          return OK;
+        }
+
+      if (sr & (GPDMA_CXSR_DTEF | GPDMA_CXSR_ULEF | GPDMA_CXSR_USEF))
+        {
+          gpdmach_putreg(chan, CH_CXFCR_OFFSET, ~0);
+          return -EIO;
+        }
+
+      up_udelay(1);
+      timeout_us--;
+    }
+
+  return -ETIMEDOUT;
 }
 
 /****************************************************************************

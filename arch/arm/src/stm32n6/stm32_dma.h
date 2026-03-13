@@ -239,6 +239,22 @@ void stm32_dmastart(DMA_HANDLE handle, dma_callback_t callback, void *arg,
 void stm32_dmastop(DMA_HANDLE handle);
 
 /****************************************************************************
+ * Name: stm32_dmapollwait
+ *
+ * Description:
+ *   Poll for DMA transfer completion.  Use for short transfers to avoid
+ *   interrupt overhead and NVIC races.  Channel must be started with
+ *   callback=NULL (no interrupt enables).
+ *
+ *   timeout_us - Timeout in microseconds
+ *
+ *   Returns OK on success, -ETIMEDOUT, or -EIO on DMA error.
+ *
+ ****************************************************************************/
+
+int stm32_dmapollwait(DMA_HANDLE handle, uint32_t timeout_us);
+
+/****************************************************************************
  * Name: stm32_dmaresidual
  *
  * Description:

@@ -138,6 +138,59 @@ config STM32N6_SPI6
 	select STM32N6_SPI
 	select SPI
 
+menu "SPI DMA Configuration"
+	depends on STM32N6_SPI && STM32N6_DMA
+
+config STM32N6_SPI_DMA
+	bool
+	default n
+
+config STM32N6_SPI1_DMA
+	bool "SPI1 DMA"
+	default n
+	depends on STM32N6_SPI1
+	select STM32N6_SPI_DMA
+
+config STM32N6_SPI2_DMA
+	bool "SPI2 DMA"
+	default n
+	depends on STM32N6_SPI2
+	select STM32N6_SPI_DMA
+
+config STM32N6_SPI3_DMA
+	bool "SPI3 DMA"
+	default n
+	depends on STM32N6_SPI3
+	select STM32N6_SPI_DMA
+
+config STM32N6_SPI4_DMA
+	bool "SPI4 DMA"
+	default n
+	depends on STM32N6_SPI4
+	select STM32N6_SPI_DMA
+
+config STM32N6_SPI5_DMA
+	bool "SPI5 DMA"
+	default n
+	depends on STM32N6_SPI5
+	select STM32N6_SPI_DMA
+
+config STM32N6_SPI6_DMA
+	bool "SPI6 DMA"
+	default n
+	depends on STM32N6_SPI6
+	select STM32N6_SPI_DMA
+
+config STM32N6_SPI_DMATHRESHOLD
+	int "SPI DMA threshold"
+	default 4
+	depends on STM32N6_SPI_DMA
+	---help---
+		Minimum number of bytes for DMA transfer. Transfers smaller
+		than this use polling instead.
+
+endmenu
+
 config STM32N6_DMA
 	bool
 	default n
