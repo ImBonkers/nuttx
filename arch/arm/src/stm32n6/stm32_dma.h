@@ -185,6 +185,19 @@ DMA_HANDLE stm32_dmachannel(enum gpdma_ttype_e type);
 DMA_HANDLE stm32_dmachannel_inst(int instance, enum gpdma_ttype_e type);
 
 /****************************************************************************
+ * Name: stm32_dmachannel_range
+ *
+ * Description:
+ *   Allocate a DMA channel from a specific instance and channel range.
+ *   instance: 1 = HPDMA1, 2 = GPDMA1
+ *   ch_lo/ch_hi: channel number range (0-11 = small FIFO, 12-15 = large)
+ *
+ ****************************************************************************/
+
+DMA_HANDLE stm32_dmachannel_range(int instance, int ch_lo, int ch_hi,
+                                   enum gpdma_ttype_e type);
+
+/****************************************************************************
  * Name: stm32_dmafree
  *
  * Description:

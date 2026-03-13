@@ -484,22 +484,22 @@ static int gpdma_setup(struct gpdma_ch_s *chan,
     }
 
   /* Auto-compute burst length for M2M if caller hasn't set SBL_1/DBL_1.
-   * Optimal burst = fifo_bytes / data_width.  For P2M/M2P leave at
-   * caller's value since the peripheral may have FIFO constraints.
+   * Max burst per channel is fifo_bytes/4 (in words), per DS14791
+   * Tables 8/9.  For sub-word data widths, burst in beats could exceed
+   * the hardware's word-based limit, so cap accordingly.
+   * For P2M/M2P leave at caller's value since the peripheral may have
+   * FIFO constraints.
    */
 
   if (chan->type == GPDMA_TTYPE_M2M_LINEAR &&
       (reg & (GPDMA_CXTR1_SBL_1_MASK | GPDMA_CXTR1_DBL_1_MASK)) == 0)
     {
-      uint32_t sdw_log2 = (reg & GPDMA_CXTR1_SDW_LOG2_MASK)
-                           >> GPDMA_CXTR1_SDW_LOG2_SHIFT;
-      uint32_t data_width = 1u << sdw_log2;
-      uint32_t burst = chan->fifo_bytes / data_width;
+      uint32_t max_burst = chan->fifo_bytes / 4;
 
-      if (burst >= 4)
+      if (max_burst >= 4)
         {
-          reg |= GPDMA_CXTR1_SBL_1(burst)
-              |  GPDMA_CXTR1_DBL_1(burst);
+          reg |= GPDMA_CXTR1_SBL_1(max_burst)
+              |  GPDMA_CXTR1_DBL_1(max_burst);
         }
     }
 
@@ -797,6 +797,34 @@ DMA_HANDLE stm32_dmachannel_inst(int instance, enum gpdma_ttype_e type)
 
   leave_critical_section(flags);
   return handle;
+}
+
+/****************************************************************************
+ * Name: stm32_dmachannel_range
+ *
+ * Description:
+ *   Allocate a DMA channel from a specific instance and channel range.
+ *   Useful for testing or when a specific FIFO size is needed.
+ *
+ ****************************************************************************/
+
+DMA_HANDLE stm32_dmachannel_range(int instance, int ch_lo, int ch_hi,
+                                   enum gpdma_ttype_e type)
+{
+  struct gpdma_ch_s *chan;
+  irqstate_t flags;
+
+  flags = enter_critical_section();
+
+  chan = gpdma_alloc_first_free(instance, ch_lo, ch_hi);
+  if (chan != NULL)
+    {
+      chan->free = false;
+      chan->type = type;
+    }
+
+  leave_critical_section(flags);
+  return (DMA_HANDLE)chan;
 }
 
 /****************************************************************************
