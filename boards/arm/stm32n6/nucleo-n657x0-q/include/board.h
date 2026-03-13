@@ -136,9 +136,9 @@
 #define GPIO_USART1_TX   GPIO_USART1_TX_1
 #define GPIO_USART1_RX   GPIO_USART1_RX_1
 
-/* SPI1 GPIOs ***************************************************************/
+/* SPI GPIOs ****************************************************************/
 
-/* SPI5: PE15=SCK (AF9), PG1=MISO (AF9), PG2=MOSI (AF9)
+/* SPI5: PE15=SCK (AF5), PG1=MISO (AF5), PG2=MOSI (AF5)
  * Arduino connector: D13=SCK, D12=MISO, D11=MOSI
  * Also on morpho CN15: pin11=SCK, pin13=MISO, pin15=MOSI
  */
