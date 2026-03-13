@@ -95,12 +95,12 @@
 
 /* APB4 peripherals *********************************************************/
 
-#define STM32_SPI6_BASE       0x56000400
-#define STM32_I2C4_BASE       0x56000800
-#define STM32_LPTIM2_BASE     0x56000c00
-#define STM32_LPTIM3_BASE     0x56001000
-#define STM32_LPTIM4_BASE     0x56001400
-#define STM32_LPTIM5_BASE     0x56001800
+#define STM32_SPI6_BASE       0x56001400
+#define STM32_I2C4_BASE       0x56001c00
+#define STM32_LPTIM2_BASE     0x56002400
+#define STM32_LPTIM3_BASE     0x56002800
+#define STM32_LPTIM4_BASE     0x56002c00
+#define STM32_LPTIM5_BASE     0x56003000
 
 /* APB5 peripherals *********************************************************/
 

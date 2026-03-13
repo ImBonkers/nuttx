@@ -99,6 +99,45 @@ config STM32N6_UART5_SERIALDRIVER
 config STM32N6_USART
 	bool
 
+config STM32N6_SPI
+	bool
+
+config STM32N6_SPI1
+	bool "SPI1"
+	default n
+	select STM32N6_SPI
+	select SPI
+
+config STM32N6_SPI2
+	bool "SPI2"
+	default n
+	select STM32N6_SPI
+	select SPI
+
+config STM32N6_SPI3
+	bool "SPI3"
+	default n
+	select STM32N6_SPI
+	select SPI
+
+config STM32N6_SPI4
+	bool "SPI4"
+	default n
+	select STM32N6_SPI
+	select SPI
+
+config STM32N6_SPI5
+	bool "SPI5"
+	default n
+	select STM32N6_SPI
+	select SPI
+
+config STM32N6_SPI6
+	bool "SPI6"
+	default n
+	select STM32N6_SPI
+	select SPI
+
 config STM32N6_DMA
 	bool
 	default n

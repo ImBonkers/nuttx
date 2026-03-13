@@ -32,9 +32,11 @@
 #include <debug.h>
 
 #include <nuttx/board.h>
+#include <nuttx/spi/spi_transfer.h>
 
 #include "arm_internal.h"
 #include "stm32_gpio.h"
+#include "stm32_spi.h"
 #include "nucleo-n657x0-q.h"
 
 #include <arch/board/board.h>
@@ -82,6 +84,22 @@ int stm32_bringup(void)
     {
       ferr("ERROR: Failed to mount procfs at /proc: %d\n", ret);
     }
+#endif
+
+#ifdef CONFIG_STM32N6_SPI5
+  /* Initialize SPI5 and register as /dev/spi5 for the spi tool */
+
+  {
+    struct spi_dev_s *spi5 = stm32_spibus_initialize(5);
+    if (spi5 != NULL)
+      {
+        ret = spi_register(spi5, 5);
+        if (ret < 0)
+          {
+            ferr("ERROR: Failed to register /dev/spi5: %d\n", ret);
+          }
+      }
+  }
 #endif
 
   UNUSED(ret);

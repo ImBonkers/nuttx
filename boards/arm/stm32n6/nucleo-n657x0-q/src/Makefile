@@ -35,6 +35,10 @@ ifeq ($(CONFIG_ARCH_BUTTONS),y)
 CSRCS += stm32_buttons.c
 endif
 
+ifeq ($(CONFIG_STM32N6_SPI),y)
+CSRCS += stm32_spi.c
+endif
+
 ifeq ($(CONFIG_STM32N6_DMA),y)
 CSRCS += stm32_dmatest.c
 endif

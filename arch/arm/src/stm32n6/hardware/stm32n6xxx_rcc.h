@@ -146,6 +146,10 @@
 #define STM32_RCC_APB4ENCR_OFFSET      0x1274  /* APB4 clock enable CLEAR register 1 */
 #define STM32_RCC_APB5ENCR_OFFSET      0x127c  /* APB5 clock enable CLEAR register */
 
+/* Kernel Clock Configuration Registers */
+
+#define STM32_RCC_CCIPR9_OFFSET        0x0164  /* Kernel clock config register 9 (SPI) */
+
 /* RCC internal RIF security registers (per-bus access control) */
 
 #define STM32_RCC_SECCFGR0_OFFSET      0x0780  /* Security config 0 (oscillators) */
@@ -241,6 +245,10 @@
 #define STM32_RCC_APB2ENCR     (STM32_RCC_BASE + STM32_RCC_APB2ENCR_OFFSET)
 #define STM32_RCC_APB4ENCR     (STM32_RCC_BASE + STM32_RCC_APB4ENCR_OFFSET)
 #define STM32_RCC_APB5ENCR     (STM32_RCC_BASE + STM32_RCC_APB5ENCR_OFFSET)
+
+/* Kernel clock configuration register addresses */
+
+#define STM32_RCC_CCIPR9       (STM32_RCC_BASE + STM32_RCC_CCIPR9_OFFSET)
 
 /* RCC internal RIF security register addresses */
 
@@ -482,14 +490,14 @@
 #define RCC_APB1ENR1_I2C2EN       (1 << 22)  /* Bit 22: I2C2 clock enable */
 #define RCC_APB1ENR1_I2C3EN       (1 << 23)  /* Bit 23: I2C3 clock enable */
 
-/* APB4 Peripheral Clock Enable Register (RCC_APB4ENR) */
+/* APB4 Peripheral Clock Enable Register 1 (RCC_APB4ENR) */
 
-#define RCC_APB4ENR_SPI6EN        (1 << 1)   /* Bit 1:  SPI6 clock enable */
-#define RCC_APB4ENR_I2C4EN        (1 << 2)   /* Bit 2:  I2C4 clock enable */
-#define RCC_APB4ENR_LPTIM2EN      (1 << 3)   /* Bit 3:  LPTIM2 clock enable */
-#define RCC_APB4ENR_LPTIM3EN      (1 << 4)   /* Bit 4:  LPTIM3 clock enable */
-#define RCC_APB4ENR_LPTIM4EN      (1 << 5)   /* Bit 5:  LPTIM4 clock enable */
-#define RCC_APB4ENR_LPTIM5EN      (1 << 6)   /* Bit 6:  LPTIM5 clock enable */
+#define RCC_APB4ENR_SPI6EN        (1 << 5)   /* Bit 5:  SPI6 clock enable */
+#define RCC_APB4ENR_I2C4EN        (1 << 7)   /* Bit 7:  I2C4 clock enable */
+#define RCC_APB4ENR_LPTIM2EN      (1 << 9)   /* Bit 9:  LPTIM2 clock enable */
+#define RCC_APB4ENR_LPTIM3EN      (1 << 10)  /* Bit 10: LPTIM3 clock enable */
+#define RCC_APB4ENR_LPTIM4EN      (1 << 11)  /* Bit 11: LPTIM4 clock enable */
+#define RCC_APB4ENR_LPTIM5EN      (1 << 12)  /* Bit 12: LPTIM5 clock enable */
 
 /* APB5 Peripheral Clock Enable Register (RCC_APB5ENR) */
 
@@ -516,5 +524,72 @@
 #define RCC_MEMENR_ALLAXISRAM     (RCC_MEMENR_AXISRAM1EN | RCC_MEMENR_AXISRAM2EN | \
                                    RCC_MEMENR_AXISRAM3EN | RCC_MEMENR_AXISRAM4EN | \
                                    RCC_MEMENR_AXISRAM5EN | RCC_MEMENR_AXISRAM6EN)
+
+/* RCC_CCIPR9 - SPI kernel clock source selection
+ *
+ * Each SPIxSEL field is 3 bits wide:
+ *   0 = PCLK (APB clock)
+ *   1 = CLKP
+ *   2 = IC8
+ *   3 = IC9
+ *   4 = MSI
+ *   5 = HSI
+ *   6 = I2S_CKIN (external)
+ *   7 = Reserved
+ */
+
+#define RCC_CCIPR9_SPI1SEL_SHIFT      (0)
+#define RCC_CCIPR9_SPI1SEL_MASK       (7 << RCC_CCIPR9_SPI1SEL_SHIFT)
+#  define RCC_CCIPR9_SPI1SEL_PCLK     (0 << RCC_CCIPR9_SPI1SEL_SHIFT)
+#  define RCC_CCIPR9_SPI1SEL_CLKP     (1 << RCC_CCIPR9_SPI1SEL_SHIFT)
+#  define RCC_CCIPR9_SPI1SEL_IC8      (2 << RCC_CCIPR9_SPI1SEL_SHIFT)
+#  define RCC_CCIPR9_SPI1SEL_IC9      (3 << RCC_CCIPR9_SPI1SEL_SHIFT)
+#  define RCC_CCIPR9_SPI1SEL_MSI      (4 << RCC_CCIPR9_SPI1SEL_SHIFT)
+#  define RCC_CCIPR9_SPI1SEL_HSI      (5 << RCC_CCIPR9_SPI1SEL_SHIFT)
+
+#define RCC_CCIPR9_SPI2SEL_SHIFT      (4)
+#define RCC_CCIPR9_SPI2SEL_MASK       (7 << RCC_CCIPR9_SPI2SEL_SHIFT)
+#  define RCC_CCIPR9_SPI2SEL_PCLK     (0 << RCC_CCIPR9_SPI2SEL_SHIFT)
+#  define RCC_CCIPR9_SPI2SEL_CLKP     (1 << RCC_CCIPR9_SPI2SEL_SHIFT)
+#  define RCC_CCIPR9_SPI2SEL_IC8      (2 << RCC_CCIPR9_SPI2SEL_SHIFT)
+#  define RCC_CCIPR9_SPI2SEL_IC9      (3 << RCC_CCIPR9_SPI2SEL_SHIFT)
+#  define RCC_CCIPR9_SPI2SEL_MSI      (4 << RCC_CCIPR9_SPI2SEL_SHIFT)
+#  define RCC_CCIPR9_SPI2SEL_HSI      (5 << RCC_CCIPR9_SPI2SEL_SHIFT)
+
+#define RCC_CCIPR9_SPI3SEL_SHIFT      (8)
+#define RCC_CCIPR9_SPI3SEL_MASK       (7 << RCC_CCIPR9_SPI3SEL_SHIFT)
+#  define RCC_CCIPR9_SPI3SEL_PCLK     (0 << RCC_CCIPR9_SPI3SEL_SHIFT)
+#  define RCC_CCIPR9_SPI3SEL_CLKP     (1 << RCC_CCIPR9_SPI3SEL_SHIFT)
+#  define RCC_CCIPR9_SPI3SEL_IC8      (2 << RCC_CCIPR9_SPI3SEL_SHIFT)
+#  define RCC_CCIPR9_SPI3SEL_IC9      (3 << RCC_CCIPR9_SPI3SEL_SHIFT)
+#  define RCC_CCIPR9_SPI3SEL_MSI      (4 << RCC_CCIPR9_SPI3SEL_SHIFT)
+#  define RCC_CCIPR9_SPI3SEL_HSI      (5 << RCC_CCIPR9_SPI3SEL_SHIFT)
+
+#define RCC_CCIPR9_SPI4SEL_SHIFT      (12)
+#define RCC_CCIPR9_SPI4SEL_MASK       (7 << RCC_CCIPR9_SPI4SEL_SHIFT)
+#  define RCC_CCIPR9_SPI4SEL_PCLK     (0 << RCC_CCIPR9_SPI4SEL_SHIFT)
+#  define RCC_CCIPR9_SPI4SEL_CLKP     (1 << RCC_CCIPR9_SPI4SEL_SHIFT)
+#  define RCC_CCIPR9_SPI4SEL_IC8      (2 << RCC_CCIPR9_SPI4SEL_SHIFT)
+#  define RCC_CCIPR9_SPI4SEL_IC9      (3 << RCC_CCIPR9_SPI4SEL_SHIFT)
+#  define RCC_CCIPR9_SPI4SEL_MSI      (4 << RCC_CCIPR9_SPI4SEL_SHIFT)
+#  define RCC_CCIPR9_SPI4SEL_HSI      (5 << RCC_CCIPR9_SPI4SEL_SHIFT)
+
+#define RCC_CCIPR9_SPI5SEL_SHIFT      (16)
+#define RCC_CCIPR9_SPI5SEL_MASK       (7 << RCC_CCIPR9_SPI5SEL_SHIFT)
+#  define RCC_CCIPR9_SPI5SEL_PCLK     (0 << RCC_CCIPR9_SPI5SEL_SHIFT)
+#  define RCC_CCIPR9_SPI5SEL_CLKP     (1 << RCC_CCIPR9_SPI5SEL_SHIFT)
+#  define RCC_CCIPR9_SPI5SEL_IC8      (2 << RCC_CCIPR9_SPI5SEL_SHIFT)
+#  define RCC_CCIPR9_SPI5SEL_IC9      (3 << RCC_CCIPR9_SPI5SEL_SHIFT)
+#  define RCC_CCIPR9_SPI5SEL_MSI      (4 << RCC_CCIPR9_SPI5SEL_SHIFT)
+#  define RCC_CCIPR9_SPI5SEL_HSI      (5 << RCC_CCIPR9_SPI5SEL_SHIFT)
+
+#define RCC_CCIPR9_SPI6SEL_SHIFT      (20)
+#define RCC_CCIPR9_SPI6SEL_MASK       (7 << RCC_CCIPR9_SPI6SEL_SHIFT)
+#  define RCC_CCIPR9_SPI6SEL_PCLK     (0 << RCC_CCIPR9_SPI6SEL_SHIFT)
+#  define RCC_CCIPR9_SPI6SEL_CLKP     (1 << RCC_CCIPR9_SPI6SEL_SHIFT)
+#  define RCC_CCIPR9_SPI6SEL_IC8      (2 << RCC_CCIPR9_SPI6SEL_SHIFT)
+#  define RCC_CCIPR9_SPI6SEL_IC9      (3 << RCC_CCIPR9_SPI6SEL_SHIFT)
+#  define RCC_CCIPR9_SPI6SEL_MSI      (4 << RCC_CCIPR9_SPI6SEL_SHIFT)
+#  define RCC_CCIPR9_SPI6SEL_HSI      (5 << RCC_CCIPR9_SPI6SEL_SHIFT)
 
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_RCC_H */
