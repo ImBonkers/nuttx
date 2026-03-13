@@ -91,7 +91,7 @@
 int stm32_bringup(void);
 
 #ifdef CONFIG_STM32N6_DMA
-int stm32_dmatest(void);
+int stm32_dmatest_main(int argc, char *argv[]);
 #endif
 
 #endif /* __ASSEMBLY__ */

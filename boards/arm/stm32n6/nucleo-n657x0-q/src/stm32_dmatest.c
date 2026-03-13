@@ -28,8 +28,8 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
-#include <debug.h>
 #include <errno.h>
 
 #include <nuttx/cache.h>
@@ -37,6 +37,7 @@
 #include "arm_internal.h"
 #include "stm32_dma.h"
 #include "hardware/stm32_gpdma.h"
+#include "hardware/stm32n6xxx_memorymap.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -46,6 +47,11 @@
 #define DMA_TEST_NBYTES    (DMA_TEST_NWORDS * 4)
 #define DMA_TEST_PATTERN   0xdead0000
 #define DMA_TEST_TIMEOUT   1000000
+
+/* DMA instance IDs (must match stm32_dma.c) */
+
+#define DMA_INST_HPDMA1    1
+#define DMA_INST_GPDMA1    2
 
 /****************************************************************************
  * Private Data
@@ -69,33 +75,14 @@ static void dmatest_callback(DMA_HANDLE handle, uint8_t status, void *arg)
   g_dma_done = true;
 }
 
-/****************************************************************************
- * Public Functions
- ****************************************************************************/
-
-/****************************************************************************
- * Name: stm32_dmatest
- *
- * Description:
- *   Run a memory-to-memory DMA transfer test. Fills a source buffer with
- *   a known pattern, DMA-copies it to a destination buffer, and verifies
- *   the result. Prints PASS/FAIL to syslog.
- *
- * Returned Value:
- *   OK on success, negative errno on failure.
- *
- ****************************************************************************/
-
-int stm32_dmatest(void)
+static int dmatest_run_one(DMA_HANDLE handle, const char *name)
 {
-  DMA_HANDLE handle;
   struct stm32_gpdma_cfg_s cfg;
   int timeout;
   int i;
   int errors;
 
-  syslog(LOG_INFO, "DMA M2M test: starting (%d bytes)...\n",
-         DMA_TEST_NBYTES);
+  printf("  %s M2M: %d bytes... ", name, DMA_TEST_NBYTES);
 
   /* Fill source with known pattern, clear destination */
 
@@ -106,43 +93,57 @@ int stm32_dmatest(void)
 
   memset(g_dma_dst, 0, sizeof(g_dma_dst));
 
-  /* Clean source buffer from D-cache to SRAM so DMA reads correct data.
-   * Uses MVA-based DCCMVAC which requires MPU WB region on Cortex-M55.
-   */
-
   up_clean_dcache((uintptr_t)g_dma_src,
                   (uintptr_t)g_dma_src + DMA_TEST_NBYTES);
-
-  /* Allocate a DMA channel for M2M transfer */
-
-  handle = stm32_dmachannel(GPDMA_TTYPE_M2M_LINEAR);
-  if (handle == NULL)
-    {
-      syslog(LOG_ERR, "DMA M2M test: FAIL - no channel available\n");
-      return -ENOMEM;
-    }
-
-  /* Configure the M2M transfer */
+  up_invalidate_dcache((uintptr_t)g_dma_dst,
+                       (uintptr_t)g_dma_dst + DMA_TEST_NBYTES);
 
   memset(&cfg, 0, sizeof(cfg));
   cfg.src_addr   = (uint32_t)g_dma_src;
   cfg.dest_addr  = (uint32_t)g_dma_dst;
-  cfg.tr1        = GPDMA_CXTR1_SDW_LOG2_WORD   /* 32-bit source width */
-                 | GPDMA_CXTR1_DDW_LOG2_WORD    /* 32-bit dest width */
-                 | GPDMA_CXTR1_SINC             /* Source increment */
-                 | GPDMA_CXTR1_DINC;            /* Dest increment */
-  cfg.request    = GPDMA_CXTR2_SWREQ;           /* Software-triggered M2M */
-  cfg.ntransfers = DMA_TEST_NBYTES;             /* Block size in bytes */
+  cfg.tr1        = GPDMA_CXTR1_SDW_LOG2_WORD
+                 | GPDMA_CXTR1_DDW_LOG2_WORD
+                 | GPDMA_CXTR1_SINC
+                 | GPDMA_CXTR1_DINC;
+  cfg.request    = GPDMA_CXTR2_SWREQ;
+  cfg.ntransfers = DMA_TEST_NBYTES;
   cfg.priority   = GPDMACFG_PRIO_LL;
-  cfg.mode       = 0;                           /* Linear (non-circular) */
+  cfg.mode       = 0;
 
   g_dma_done = false;
   g_dma_status = 0;
 
   stm32_dmasetup(handle, &cfg);
-  stm32_dmastart(handle, dmatest_callback, NULL, false);
 
-  /* Busy-wait for completion with timeout */
+  /* Debug: read back channel registers via base ptr in handle.
+   * handle points to gpdma_ch_s: instance(u8), channel(u8), irq(u8),
+   * type(enum=int), free(bool), base(u32) at offset ~12 bytes.
+   * Just use the known channel 0 base directly.
+   */
+
+  {
+    /* Extract base from handle struct (base is at a known offset).
+     * Simpler: just compute from instance+channel.
+     */
+
+    uint8_t inst = *((uint8_t *)handle);     /* dma_instance */
+    uint8_t ch   = *((uint8_t *)handle + 1); /* channel */
+    uint32_t base = (inst == DMA_INST_HPDMA1)
+                  ? STM32_HPDMA1_BASE : STM32_GPDMA1_BASE;
+    base += 0x80 * ch;
+
+    printf("    ch%d base=0x%08lx regs: SAR=0x%08lx DAR=0x%08lx "
+           "BR1=0x%08lx TR1=0x%08lx TR2=0x%08lx CR=0x%08lx\n",
+           ch, (unsigned long)base,
+           (unsigned long)getreg32(base + 0x9C),
+           (unsigned long)getreg32(base + 0xA0),
+           (unsigned long)getreg32(base + 0x98),
+           (unsigned long)getreg32(base + 0x90),
+           (unsigned long)getreg32(base + 0x94),
+           (unsigned long)getreg32(base + 0x64));
+  }
+
+  stm32_dmastart(handle, dmatest_callback, NULL, false);
 
   for (timeout = 0; timeout < DMA_TEST_TIMEOUT && !g_dma_done; timeout++)
     {
@@ -150,46 +151,28 @@ int stm32_dmatest(void)
 
   if (!g_dma_done)
     {
-      syslog(LOG_ERR, "DMA M2M test: FAIL - timeout (residual=%d)\n",
+      printf("FAIL (timeout, residual=%d)\n",
              (int)stm32_dmaresidual(handle));
       stm32_dmastop(handle);
       stm32_dmafree(handle);
       return -ETIMEDOUT;
     }
 
-  /* Check for DMA errors */
-
   if (g_dma_status & DMA_STATUS_FATAL)
     {
-      syslog(LOG_ERR, "DMA M2M test: FAIL - DMA error status=0x%02x\n",
-             g_dma_status);
+      printf("FAIL (error status=0x%02x)\n", g_dma_status);
       stm32_dmafree(handle);
       return -EIO;
     }
 
-  /* Invalidate destination buffer in D-cache so CPU reads fresh SRAM
-   * data written by DMA.  Uses MVA-based DCIMVAC.
-   */
-
   up_invalidate_dcache((uintptr_t)g_dma_dst,
                        (uintptr_t)g_dma_dst + DMA_TEST_NBYTES);
-
-  /* Verify the transfer */
 
   errors = 0;
   for (i = 0; i < DMA_TEST_NWORDS; i++)
     {
       if (g_dma_dst[i] != g_dma_src[i])
         {
-          if (errors < 4)
-            {
-              syslog(LOG_ERR,
-                     "DMA M2M test: mismatch at [%d]: "
-                     "got 0x%08lx expected 0x%08lx\n",
-                     i, (unsigned long)g_dma_dst[i],
-                     (unsigned long)g_dma_src[i]);
-            }
-
           errors++;
         }
     }
@@ -198,13 +181,78 @@ int stm32_dmatest(void)
 
   if (errors > 0)
     {
-      syslog(LOG_ERR, "DMA M2M test: FAIL - %d/%d words mismatched\n",
-             errors, DMA_TEST_NWORDS);
+      printf("FAIL (%d/%d mismatched)\n", errors, DMA_TEST_NWORDS);
+      printf("    src=%p dst=%p status=0x%02x\n",
+             g_dma_src, g_dma_dst, g_dma_status);
+      printf("    dst[0..3]: 0x%08lx 0x%08lx 0x%08lx 0x%08lx\n",
+             (unsigned long)g_dma_dst[0], (unsigned long)g_dma_dst[1],
+             (unsigned long)g_dma_dst[2], (unsigned long)g_dma_dst[3]);
+
+      /* Dump RISAF2 (AXISRAM1) illegal access registers.
+       * RISAF2 Secure base = 0x54027000
+       * CR     @ +0x000
+       * IASR   @ +0x008
+       * IAR[0].IAESR @ +0x020
+       * IAR[0].IADDR @ +0x024
+       * REG[0].CFGR  @ +0x040
+       */
+
+      printf("    RISAF2: CR=0x%08lx IASR=0x%08lx "
+             "IAESR=0x%08lx IADDR=0x%08lx R0CFGR=0x%08lx\n",
+             (unsigned long)getreg32(0x54027000),
+             (unsigned long)getreg32(0x54027008),
+             (unsigned long)getreg32(0x54027020),
+             (unsigned long)getreg32(0x54027024),
+             (unsigned long)getreg32(0x54027040));
       return -EIO;
     }
 
-  syslog(LOG_INFO,
-         "DMA M2M test: PASS (%d bytes, status=0x%02x)\n",
-         DMA_TEST_NBYTES, g_dma_status);
+  printf("PASS\n");
   return OK;
+}
+
+/****************************************************************************
+ * Public Functions
+ ****************************************************************************/
+
+int stm32_dmatest_main(int argc, char *argv[])
+{
+  DMA_HANDLE handle;
+  int ret = OK;
+
+  printf("DMA Memory-to-Memory Test\n");
+
+#ifdef CONFIG_STM32N6_HPDMA1
+  handle = stm32_dmachannel_inst(DMA_INST_HPDMA1,
+                                 GPDMA_TTYPE_M2M_LINEAR);
+  if (handle != NULL)
+    {
+      if (dmatest_run_one(handle, "HPDMA1") != OK)
+        {
+          ret = -EIO;
+        }
+    }
+  else
+    {
+      printf("  HPDMA1: no channel available\n");
+    }
+#endif
+
+#ifdef CONFIG_STM32N6_GPDMA1
+  handle = stm32_dmachannel_inst(DMA_INST_GPDMA1,
+                                 GPDMA_TTYPE_M2M_LINEAR);
+  if (handle != NULL)
+    {
+      if (dmatest_run_one(handle, "GPDMA1") != OK)
+        {
+          ret = -EIO;
+        }
+    }
+  else
+    {
+      printf("  GPDMA1: no channel available\n");
+    }
+#endif
+
+  return ret;
 }

@@ -509,8 +509,9 @@ static int gpdma_setup(struct gpdma_ch_s *chan,
   gpdmach_modifyreg32(chan, CH_CXCR_OFFSET, GPDMA_CXCR_PRIO_MASK,
                       cfg->priority << GPDMA_CXCR_PRIO_SHIFT);
 
-  /* Set TR1 register.  Always set SSEC and DSEC (Secure source/dest)
-   * because we run in Secure state and all SRAM is Secure.
+  /* Set TR1 register.  Set SSEC and DSEC (Secure source/dest) only
+   * for GPDMA1.  HPDMA1 on AHB5 may need Non-Secure transactions
+   * to access SRAM through the AXI interconnect.
    */
 
   gpdmach_putreg(chan, CH_CXTR1_OFFSET, cfg->tr1 |
@@ -596,7 +597,16 @@ void weak_function arm_dma_initialize(void)
   /* Enable DMA controller clocks using SET registers (STM32N6 pattern) */
 
 #ifdef CONFIG_STM32N6_HPDMA1
-  putreg32(RCC_AHB5ENR_HPDMA1EN, STM32_RCC_AHB5ENSR);
+  /* HPDMA1 uses an AXI master port to access AXISRAM.  The AXI
+   * interconnect clock (ACLKN) and companion clock (ACLKNC) must be
+   * enabled for HPDMA1 data transfers to reach memory.  Without
+   * these, HPDMA1 completes transfers (TC fires) but writes nothing.
+   */
+
+  putreg32(RCC_BUSENR_ACLKNEN | RCC_BUSENR_ACLKNCEN,
+           STM32_RCC_BUSENSR);
+  putreg32(RCC_AHB5ENR_HPDMA1EN | RCC_AHB5ENR_CACHEAXIEN,
+           STM32_RCC_AHB5ENSR);
 #endif
 
 #ifdef CONFIG_STM32N6_GPDMA1
@@ -625,9 +635,13 @@ void weak_function arm_dma_initialize(void)
     {
       chan = &g_chan[i];
 
-      /* Disable CID filtering on this channel (allow any CID) */
+      /* Enable CID filtering with static CID=1 (Cortex-M55) per ST HAL
+       * recommendation: "It is recommended to always enable the isolation
+       * feature (CFEN=1) of the HPDMA channel with default CID=1."
+       * CCIDCFGR: bit 0 = CFEN, bits [6:4] = SCID.
+       */
 
-      gpdmach_putreg(chan, CH_CXCIDCFGR_OFFSET, 0);
+      gpdmach_putreg(chan, CH_CXCIDCFGR_OFFSET, 0x11);
 
       /* Attach DMA interrupt vector */
 
@@ -682,6 +696,42 @@ DMA_HANDLE stm32_dmachannel(enum gpdma_ttype_e type)
       dmaerr("No available DMA channel for transfer type=%d\n", type);
     }
 
+  return handle;
+}
+
+/****************************************************************************
+ * Name: stm32_dmachannel_inst
+ *
+ * Description:
+ *   Allocate a DMA channel from a specific DMA instance.
+ *   instance: DMA_INST_HPDMA1 (1) or DMA_INST_GPDMA1 (2).
+ *
+ ****************************************************************************/
+
+DMA_HANDLE stm32_dmachannel_inst(int instance, enum gpdma_ttype_e type)
+{
+  DMA_HANDLE handle = NULL;
+  irqstate_t flags;
+  int i;
+
+  DEBUGASSERT(type != GPDMA_TTYPE_2D);
+
+  flags = enter_critical_section();
+
+  for (i = 0; i < (int)DMA_NCHANNELS; i++)
+    {
+      struct gpdma_ch_s *chan = &g_chan[i];
+
+      if (chan->free && chan->dma_instance == instance)
+        {
+          chan->free = false;
+          chan->type = type;
+          handle = (DMA_HANDLE)chan;
+          break;
+        }
+    }
+
+  leave_critical_section(flags);
   return handle;
 }
 

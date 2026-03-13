@@ -174,6 +174,17 @@ extern "C"
 DMA_HANDLE stm32_dmachannel(enum gpdma_ttype_e type);
 
 /****************************************************************************
+ * Name: stm32_dmachannel_inst
+ *
+ * Description:
+ *   Allocate a DMA channel from a specific DMA instance.
+ *   instance: 1 = HPDMA1, 2 = GPDMA1
+ *
+ ****************************************************************************/
+
+DMA_HANDLE stm32_dmachannel_inst(int instance, enum gpdma_ttype_e type);
+
+/****************************************************************************
  * Name: stm32_dmafree
  *
  * Description:

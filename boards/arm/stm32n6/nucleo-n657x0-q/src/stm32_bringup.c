@@ -86,6 +86,12 @@ int stm32_bringup(void)
     }
 #endif
 
+#ifdef CONFIG_STM32N6_DMA
+  /* Run DMA M2M tests on both HPDMA1 and GPDMA1 */
+
+  stm32_dmatest_main(0, NULL);
+#endif
+
 #ifdef CONFIG_STM32N6_SPI5
   /* Initialize SPI5 and register as /dev/spi5 for the spi tool */
 

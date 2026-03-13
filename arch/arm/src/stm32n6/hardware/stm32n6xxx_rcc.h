@@ -105,6 +105,7 @@
 /* Atomic SET variants of misc enable registers (offset + 0x800) */
 
 #define STM32_RCC_DIVENSR_OFFSET       0x0a40  /* IC dividers enable SET register */
+#define STM32_RCC_BUSENSR_OFFSET       0x0a44  /* Embedded buses enable SET register */
 #define STM32_RCC_MEMENSR_OFFSET       0x0a4c  /* Embedded memories enable SET register */
 
 /* Clock enable registers (read/write) */
@@ -206,6 +207,8 @@
 
 #define STM32_RCC_DIVENR       (STM32_RCC_BASE + STM32_RCC_DIVENR_OFFSET)
 #define STM32_RCC_DIVENSR      (STM32_RCC_BASE + STM32_RCC_DIVENSR_OFFSET)
+#define STM32_RCC_BUSENR       (STM32_RCC_BASE + STM32_RCC_BUSENR_OFFSET)
+#define STM32_RCC_BUSENSR      (STM32_RCC_BASE + STM32_RCC_BUSENSR_OFFSET)
 #define STM32_RCC_MEMENR       (STM32_RCC_BASE + STM32_RCC_MEMENR_OFFSET)
 #define STM32_RCC_MEMENSR      (STM32_RCC_BASE + STM32_RCC_MEMENSR_OFFSET)
 
@@ -430,9 +433,17 @@
 
 #define RCC_AHB3ENR_RIFSCEN       (1 << 9)   /* Bit 9:  RIFSC clock enable */
 
+/* Embedded Buses Enable Register (RCC_BUSENR) */
+
+#define RCC_BUSENR_ACLKNEN        (1 << 0)   /* Bit 0:  AXI interconnect clock enable */
+#define RCC_BUSENR_ACLKNCEN       (1 << 1)   /* Bit 1:  AXI interconnect companion clock */
+#define RCC_BUSENR_AHBMEN         (1 << 2)   /* Bit 2:  AHB matrix clock enable */
+#define RCC_BUSENR_AHB5EN         (1 << 7)   /* Bit 7:  AHB5 bus clock enable */
+
 /* AHB5 Peripheral Clock Enable Register (RCC_AHB5ENR) */
 
 #define RCC_AHB5ENR_HPDMA1EN      (1 << 0)   /* Bit 0:  HPDMA1 clock enable */
+#define RCC_AHB5ENR_CACHEAXIEN    (1 << 30)  /* Bit 30: CACHEAXI clock enable */
 
 /* RCC_SECCFGR4 - Bus security configuration (bit = 1 means secure-only) */
 
