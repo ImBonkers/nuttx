@@ -219,6 +219,7 @@
 #include <arch/board/board.h>
 
 #include "arm_internal.h"
+#include <arch/armv8-m/barriers.h>
 #include "stm32_rcc.h"
 #include "stm32_i2c.h"
 #include "stm32_gpio.h"
@@ -275,6 +276,7 @@
  *   4 = MSI
  *   5 = HSI
  */
+
 
 #undef INVALID_CLOCK_SOURCE
 
@@ -711,14 +713,16 @@ static const struct i2c_ops_s stm32_i2c_ops =
  * Name: stm32_i2c_getreg
  *
  * Description:
- *   Get a 16-bit register value by offset
+ *   Get a register value by offset.
+ *   NOTE: STM32N6 I2C requires 32-bit access — 16-bit reads/writes to
+ *   TXDR/RXDR silently fail on the APB bus.
  *
  ****************************************************************************/
 
 static inline uint16_t stm32_i2c_getreg(struct stm32_i2c_priv_s *priv,
                                         uint8_t offset)
 {
-  return getreg16(priv->config->base + offset);
+  return (uint16_t)getreg32(priv->config->base + offset);
 }
 
 /****************************************************************************
@@ -739,14 +743,16 @@ static inline uint32_t stm32_i2c_getreg32(struct stm32_i2c_priv_s *priv,
  * Name: stm32_i2c_putreg
  *
  * Description:
- *  Put a 16-bit register value by offset
+ *  Put a register value by offset.
+ *  NOTE: STM32N6 I2C requires 32-bit access — 16-bit writes to
+ *  TXDR silently fail on the APB bus.
  *
  ****************************************************************************/
 
 static inline void stm32_i2c_putreg(struct stm32_i2c_priv_s *priv,
                                     uint8_t offset, uint16_t value)
 {
-  putreg16(value, priv->config->base + offset);
+  putreg32((uint32_t)value, priv->config->base + offset);
 }
 
 /****************************************************************************
@@ -1974,7 +1980,29 @@ static int stm32_i2c_isr(int irq, void *context, void *arg)
   struct stm32_i2c_priv_s *priv = (struct stm32_i2c_priv_s *)arg;
 
   DEBUGASSERT(priv != NULL);
-  return stm32_i2c_isr_process(priv);
+  stm32_i2c_isr_process(priv);
+
+  /* Ensure peripheral writes (TXDR, ICR) reach the I2C peripheral before
+   * the ISR returns.  Without this barrier, the Cortex-M55 write buffer
+   * may delay the TXDR write, causing stale interrupt flag state.
+   */
+
+  UP_DSB();
+
+  /* On Cortex-M55 (STM32N6), the NVIC does not reliably re-trigger after
+   * a TXDR write clears TXIS.  The I2C hardware re-asserts TXIS when
+   * TXDR empties to the shift register, but this happens after the NVIC
+   * has already sampled the interrupt line as LOW during ISR return.
+   * Force re-entry by setting the NVIC pending bit while the transfer
+   * is still in progress.
+   */
+
+  if (priv->dcnt >= 0 && priv->msgc > 0)
+    {
+      up_trigger_irq(irq, 0);
+    }
+
+  return OK;
 }
 #endif
 
