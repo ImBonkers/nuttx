@@ -330,10 +330,11 @@ void __start(void)
    * clocks keep running during CSLEEP (WFI).  Without these, WFI halts
    * ALL clocks — TIM2, USART1, SRAM — and the system never wakes up.
    *
-   * BUSLPENSR bits: ACLKN(0) ACLKNC(1) AHBM(2) AHB4(6) APB1(8) APB2(9)
+   * BUSLPENSR bits: ACLKN(0) ACLKNC(1) AHBM(2) AHB4(6) AHB5(7) APB1(8)
+   *                  APB2(9)
    */
 
-  putreg32(0x0347, STM32_RCC_BASE + 0x0a84);  /* BUSLPENSR */
+  putreg32(0x03c7, STM32_RCC_BASE + 0x0a84);  /* BUSLPENSR (+AHB5) */
 
   /* MEMLPENSR: enable all AXISRAM banks + CACHEAXIRAM for CSLEEP.
    * Bits: SRAM3(0) SRAM4(1) SRAM5(2) SRAM6(3) SRAM1(7) SRAM2(8) CACHE(10)
@@ -341,10 +342,14 @@ void __start(void)
 
   putreg32(0x058f, STM32_RCC_BASE + 0x0a8c);  /* MEMLPENSR */
 
-  /* Peripheral-level LPEN: TIM2 on APB1, USART1 on APB2 */
+  /* Peripheral-level LPEN: TIM2 on APB1, USART1 on APB2,
+   * USB OTG1 + OTGPHY1 on AHB5 (so DWC2 core runs during WFI)
+   */
 
   putreg32(0x01, STM32_RCC_BASE + 0x0aa4);    /* APB1LPENSR1: TIM2 */
   putreg32(0x10, STM32_RCC_BASE + 0x0aac);    /* APB2LPENSR: USART1 */
+  putreg32((1 << 26) | (1 << 27),
+           STM32_RCC_BASE + 0x0aa0);           /* AHB5LPENSR: OTG1+OTGPHY1 */
 
   stm32_pwr_enablevddio();
 

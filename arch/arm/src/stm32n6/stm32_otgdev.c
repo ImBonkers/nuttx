@@ -893,7 +893,7 @@ static uint32_t stm32_getreg(uint32_t addr)
         {
           if (count == 4)
             {
-              syslog(LOG_INFO,"...\n");
+              uinfo("...\n");
             }
 
           return val;
@@ -910,7 +910,7 @@ static uint32_t stm32_getreg(uint32_t addr)
         {
           /* Yes.. then show how many times the value repeated */
 
-          syslog(LOG_INFO,"[repeats %" PRId32 " more times]\n", count - 3);
+          uinfo("[repeats %" PRId32 " more times]\n", count - 3);
         }
 
       /* Save the new address, value, and count */
@@ -922,7 +922,7 @@ static uint32_t stm32_getreg(uint32_t addr)
 
   /* Show the register value read */
 
-  syslog(LOG_INFO,"%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
+  uinfo("%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
   return val;
 }
 #endif
@@ -940,7 +940,7 @@ static void stm32_putreg(uint32_t val, uint32_t addr)
 {
   /* Show the register value being written */
 
-  syslog(LOG_INFO,"%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
+  uinfo("%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
 
   /* Write the value */
 
@@ -1224,9 +1224,13 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
   regval |= (OTG_DIEPCTL_CNAK | OTG_DIEPCTL_EPENA);
   stm32_putreg(regval, STM32_OTG_DIEPCTL(privep->epphy));
 
-  /* Transfer the data to the TxFIFO */
+  /* Transfer the data to the TxFIFO.  A short delay after the write
+   * ensures the DWC2 core has committed FIFO data before the ISR
+   * returns and other bus activity begins.
+   */
 
   stm32_txfifo_write(privep, buf, nbytes);
+  __asm__ __volatile__ ("dsb 15" : : : "memory");
 }
 
 /****************************************************************************
@@ -1290,7 +1294,7 @@ static void stm32_epin_request(struct stm32_usbdev_s *priv,
       return;
     }
 
-  syslog(LOG_INFO,"EP%"  PRId8 " req=%p: len=%" PRId16 " xfrd=%"  PRId16" zlp=%"
+  uinfo("EP%"  PRId8 " req=%p: len=%" PRId16 " xfrd=%"  PRId16" zlp=%"
         PRId8 "\n", privep->epphy, privreq, privreq->req.len,
           privreq->req.xfrd, privep->zlp);
 
@@ -1574,7 +1578,7 @@ static void stm32_epout_complete(struct stm32_usbdev_s *priv,
       return;
     }
 
-  syslog(LOG_INFO,"EP%d: len=%zu xfrd=%zu\n",
+  uinfo("EP%d: len=%zu xfrd=%zu\n",
           privep->epphy, privreq->req.len, privreq->req.xfrd);
 
   /* Return the completed read request to the class driver and mark the
@@ -1610,7 +1614,7 @@ static inline void stm32_ep0out_receive(struct stm32_ep_s *privep,
   DEBUGASSERT(privep && privep->dev);
   priv = (struct stm32_usbdev_s *)privep->dev;
 
-  syslog(LOG_INFO,"EP0: bcnt=%d\n", bcnt);
+  uinfo("EP0: bcnt=%d\n", bcnt);
   usbtrace(TRACE_READ(EP0), bcnt);
 
   /* Verify that an OUT SETUP request as received before this data was
@@ -1706,7 +1710,7 @@ static inline void stm32_epout_receive(struct stm32_ep_s *privep,
       return;
     }
 
-  syslog(LOG_INFO,"EP%d: len=%zu xfrd=%zu\n", privep->epphy,
+  uinfo("EP%d: len=%zu xfrd=%zu\n", privep->epphy,
         privreq->req.len, privreq->req.xfrd);
   usbtrace(TRACE_READ(privep->epphy), bcnt);
 
@@ -1796,7 +1800,7 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
               return;
             }
 
-          syslog(LOG_INFO,"EP%d: len=%d\n", privep->epphy, privreq->req.len);
+          uinfo("EP%d: len=%d\n", privep->epphy, privreq->req.len);
 
           /* Ignore any attempt to receive a zero length packet (this really
            * should not happen.
@@ -2615,7 +2619,7 @@ static inline void stm32_ep0out_setup(struct stm32_usbdev_s *priv)
   ctrlreq.index = GETUINT16(priv->ctrlreq.index);
   ctrlreq.len   = GETUINT16(priv->ctrlreq.len);
 
-  syslog(LOG_INFO,"type=%02x req=%02x value=%04x index=%04x len=%04x\n",
+  uinfo("type=%02x req=%02x value=%04x index=%04x len=%04x\n",
           ctrlreq.type, ctrlreq.req, ctrlreq.value,
           ctrlreq.index, ctrlreq.len);
 
@@ -3796,6 +3800,7 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
           usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_RXFIFO),
                   (uint16_t)regval);
           stm32_rxinterrupt(priv);
+
         }
 
       /* USB reset interrupt */
@@ -4489,7 +4494,7 @@ static int stm32_ep_submit(struct usbdev_ep_s *ep,
   if (!req || !req->callback || !req->buf || !ep)
     {
       usbtrace(TRACE_DEVERROR(STM32_TRACEERR_INVALIDPARMS), 0);
-      syslog(LOG_INFO,"req=%p callback=%p buf=%p ep=%p\n",
+      uinfo("req=%p callback=%p buf=%p ep=%p\n",
             req, req->callback, req->buf, ep);
       return -EINVAL;
     }
@@ -5481,9 +5486,8 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
 #endif
 
   /* Update GDFIFOCFG: move EPINFOBASE past our FIFO allocation.
-   * DWC2 v5.00 (CID=0x5000) has internal DMA architecture.
-   * The EPC (Endpoint Info Controller) region must not overlap
-   * with allocated FIFOs.  Set EPINFOBASE = total allocated words.
+   * DWC2 CID=0x5000 has internal DMA architecture; the EPC region
+   * must not overlap with allocated FIFOs.
    */
 
 #if STM32_NENDPOINTS > 8
@@ -5807,7 +5811,7 @@ void arm_usbinitialize(void)
 
   /* Allow core to stabilize after reset release */
 
-  up_mdelay(2);
+  up_mdelay(5);
 
   /* Initialize software data structures */
 
