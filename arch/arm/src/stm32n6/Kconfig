@@ -102,6 +102,33 @@ config STM32N6_USART
 config STM32N6_SPI
 	bool
 
+config STM32N6_I2C
+	bool
+
+config STM32N6_I2C1
+	bool "I2C1"
+	default n
+	select STM32N6_I2C
+	select I2C
+
+config STM32N6_I2C2
+	bool "I2C2"
+	default n
+	select STM32N6_I2C
+	select I2C
+
+config STM32N6_I2C3
+	bool "I2C3"
+	default n
+	select STM32N6_I2C
+	select I2C
+
+config STM32N6_I2C4
+	bool "I2C4"
+	default n
+	select STM32N6_I2C
+	select I2C
+
 config STM32N6_SPI1
 	bool "SPI1"
 	default n

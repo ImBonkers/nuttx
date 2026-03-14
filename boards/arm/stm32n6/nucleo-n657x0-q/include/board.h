@@ -147,6 +147,20 @@
 #define GPIO_SPI5_MISO   GPIO_SPI5_MISO_2
 #define GPIO_SPI5_MOSI   GPIO_SPI5_MOSI_2
 
+/* I2C GPIOs ****************************************************************/
+
+/* I2C1: PH9=SCL (AF4), PC1=SDA (AF4) — morpho CN15 pin3/pin5
+ * Also Arduino D15/D14 with solder bridge mod (SB2+SB4 ON, SB3+SB5 OFF).
+ */
+
+#define GPIO_I2C1_SCL    GPIO_I2C1_SCL_2
+#define GPIO_I2C1_SDA    GPIO_I2C1_SDA_2
+
+/* I2C2: PB10=SCL (AF4), PB11=SDA (AF4) — TCPP03 + Arduino/morpho header */
+
+#define GPIO_I2C2_SCL    GPIO_I2C2_SCL_1
+#define GPIO_I2C2_SDA    GPIO_I2C2_SDA_1
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/

@@ -60,6 +60,15 @@
 
 #define GPIO_BTN_USER   (GPIO_INPUT | GPIO_FLOAT | GPIO_PORTC | GPIO_PIN13)
 
+/* TCPP0203 USB Type-C PD controller ****************************************/
+
+/* Enable pin: PA7, push-pull output, active HIGH.
+ * Must be driven HIGH before TCPP0203 responds on I2C2.
+ */
+
+#define GPIO_TCPP03_ENABLE (GPIO_OUTPUT | GPIO_PUSHPULL | GPIO_SPEED_2MHZ | \
+                            GPIO_OUTPUT_CLEAR | GPIO_PORTA | GPIO_PIN7)
+
 /****************************************************************************
  * Public Types
  ****************************************************************************/

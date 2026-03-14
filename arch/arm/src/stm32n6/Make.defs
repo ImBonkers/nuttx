@@ -47,6 +47,10 @@ ifeq ($(CONFIG_STM32N6_SPI),y)
 CHIP_CSRCS += stm32_spi.c
 endif
 
+ifeq ($(CONFIG_STM32N6_I2C),y)
+CHIP_CSRCS += stm32_i2c.c
+endif
+
 ifeq ($(CONFIG_STM32N6_DMA),y)
 CHIP_CSRCS += stm32_dma.c
 endif

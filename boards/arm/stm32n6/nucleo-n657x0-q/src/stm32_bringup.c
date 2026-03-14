@@ -33,6 +33,7 @@
 
 #include <nuttx/board.h>
 #include <nuttx/spi/spi_transfer.h>
+#include <nuttx/i2c/i2c_master.h>
 #ifdef CONFIG_CDCACM
 #include <nuttx/usb/cdcacm.h>
 #endif
@@ -40,6 +41,7 @@
 #include "arm_internal.h"
 #include "stm32_gpio.h"
 #include "stm32_spi.h"
+#include "stm32_i2c.h"
 #include "nucleo-n657x0-q.h"
 
 #include <arch/board/board.h>
@@ -103,6 +105,52 @@ int stm32_bringup(void)
           }
       }
   }
+#endif
+
+
+#ifdef CONFIG_STM32N6_I2C1
+  /* Initialize I2C1 and register as /dev/i2c1 for the i2c tool.
+   * I2C1: PH9=SCL, PC1=SDA — morpho CN15 pin3(SCL), pin5(SDA).
+   */
+
+  {
+    struct i2c_master_s *i2c1 = stm32_i2cbus_initialize(1);
+    if (i2c1 != NULL)
+      {
+        ret = i2c_register(i2c1, 1);
+        if (ret < 0)
+          {
+            ferr("ERROR: Failed to register /dev/i2c1: %d\n", ret);
+          }
+      }
+  }
+#endif
+
+#ifdef CONFIG_STM32N6_I2C2
+  /* Enable TCPP0203 USB Type-C PD controller on I2C2.
+   * The chip has an enable pin on PA7 (push-pull, active HIGH).
+   * Must be driven HIGH before I2C communication will succeed.
+   */
+
+  stm32_configgpio(GPIO_TCPP03_ENABLE);
+  stm32_gpiowrite(GPIO_TCPP03_ENABLE, true);
+  up_mdelay(10); /* TCPP03 needs time after enable */
+
+  /* Initialize I2C2 and register as /dev/i2c2 for the i2c tool */
+
+  {
+    struct i2c_master_s *i2c2 = stm32_i2cbus_initialize(2);
+    if (i2c2 != NULL)
+      {
+        ret = i2c_register(i2c2, 2);
+        if (ret < 0)
+          {
+            ferr("ERROR: Failed to register /dev/i2c2: %d\n", ret);
+          }
+
+      }
+  }
+
 #endif
 
 #if defined(CONFIG_CDCACM) && !defined(CONFIG_CDCACM_CONSOLE)
