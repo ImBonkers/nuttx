@@ -893,7 +893,7 @@ static uint32_t stm32_getreg(uint32_t addr)
         {
           if (count == 4)
             {
-              uinfo("...\n");
+              syslog(LOG_INFO,"...\n");
             }
 
           return val;
@@ -910,7 +910,7 @@ static uint32_t stm32_getreg(uint32_t addr)
         {
           /* Yes.. then show how many times the value repeated */
 
-          uinfo("[repeats %" PRId32 " more times]\n", count - 3);
+          syslog(LOG_INFO,"[repeats %" PRId32 " more times]\n", count - 3);
         }
 
       /* Save the new address, value, and count */
@@ -922,7 +922,7 @@ static uint32_t stm32_getreg(uint32_t addr)
 
   /* Show the register value read */
 
-  uinfo("%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
+  syslog(LOG_INFO,"%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
   return val;
 }
 #endif
@@ -940,7 +940,7 @@ static void stm32_putreg(uint32_t val, uint32_t addr)
 {
   /* Show the register value being written */
 
-  uinfo("%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
+  syslog(LOG_INFO,"%08" PRIx32 "->%08" PRIx32 "\n", addr, val);
 
   /* Write the value */
 
@@ -1227,7 +1227,6 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
   /* Transfer the data to the TxFIFO */
 
   stm32_txfifo_write(privep, buf, nbytes);
-
 }
 
 /****************************************************************************
@@ -1291,7 +1290,7 @@ static void stm32_epin_request(struct stm32_usbdev_s *priv,
       return;
     }
 
-  uinfo("EP%"  PRId8 " req=%p: len=%" PRId16 " xfrd=%"  PRId16" zlp=%"
+  syslog(LOG_INFO,"EP%"  PRId8 " req=%p: len=%" PRId16 " xfrd=%"  PRId16" zlp=%"
         PRId8 "\n", privep->epphy, privreq, privreq->req.len,
           privreq->req.xfrd, privep->zlp);
 
@@ -1575,7 +1574,7 @@ static void stm32_epout_complete(struct stm32_usbdev_s *priv,
       return;
     }
 
-  uinfo("EP%d: len=%zu xfrd=%zu\n",
+  syslog(LOG_INFO,"EP%d: len=%zu xfrd=%zu\n",
           privep->epphy, privreq->req.len, privreq->req.xfrd);
 
   /* Return the completed read request to the class driver and mark the
@@ -1611,7 +1610,7 @@ static inline void stm32_ep0out_receive(struct stm32_ep_s *privep,
   DEBUGASSERT(privep && privep->dev);
   priv = (struct stm32_usbdev_s *)privep->dev;
 
-  uinfo("EP0: bcnt=%d\n", bcnt);
+  syslog(LOG_INFO,"EP0: bcnt=%d\n", bcnt);
   usbtrace(TRACE_READ(EP0), bcnt);
 
   /* Verify that an OUT SETUP request as received before this data was
@@ -1707,7 +1706,7 @@ static inline void stm32_epout_receive(struct stm32_ep_s *privep,
       return;
     }
 
-  uinfo("EP%d: len=%zu xfrd=%zu\n", privep->epphy,
+  syslog(LOG_INFO,"EP%d: len=%zu xfrd=%zu\n", privep->epphy,
         privreq->req.len, privreq->req.xfrd);
   usbtrace(TRACE_READ(privep->epphy), bcnt);
 
@@ -1797,7 +1796,7 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
               return;
             }
 
-          uinfo("EP%d: len=%d\n", privep->epphy, privreq->req.len);
+          syslog(LOG_INFO,"EP%d: len=%d\n", privep->epphy, privreq->req.len);
 
           /* Ignore any attempt to receive a zero length packet (this really
            * should not happen.
@@ -2616,7 +2615,7 @@ static inline void stm32_ep0out_setup(struct stm32_usbdev_s *priv)
   ctrlreq.index = GETUINT16(priv->ctrlreq.index);
   ctrlreq.len   = GETUINT16(priv->ctrlreq.len);
 
-  uinfo("type=%02x req=%02x value=%04x index=%04x len=%04x\n",
+  syslog(LOG_INFO,"type=%02x req=%02x value=%04x index=%04x len=%04x\n",
           ctrlreq.type, ctrlreq.req, ctrlreq.value,
           ctrlreq.index, ctrlreq.len);
 
@@ -4490,7 +4489,7 @@ static int stm32_ep_submit(struct usbdev_ep_s *ep,
   if (!req || !req->callback || !req->buf || !ep)
     {
       usbtrace(TRACE_DEVERROR(STM32_TRACEERR_INVALIDPARMS), 0);
-      uinfo("req=%p callback=%p buf=%p ep=%p\n",
+      syslog(LOG_INFO,"req=%p callback=%p buf=%p ep=%p\n",
             req, req->callback, req->buf, ep);
       return -EINVAL;
     }
@@ -5398,8 +5397,6 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   regval |= OTG_DCFG_PFIVL_80PCT;
   stm32_putreg(regval, STM32_OTG_DCFG);
 
-  /* Set device speed to High Speed (N6 has HS PHY) */
-
   /* Set device speed to HS (DSPD=0) for embedded HS PHY */
 
   regval = stm32_getreg(STM32_OTG_DCFG);
@@ -5619,10 +5616,9 @@ void arm_usbinitialize(void)
 
   /* Configure HSE/2 divider BEFORE enabling HSE (per Zephyr order).
    * HSEDIV2SEL=1 makes "HSE/2" actually divide by 2 (24 MHz from 48 MHz).
-   * RCC_HSECFGR offset=0x0054, HSEDIV2SEL=bit 6.
    */
 
-  modifyreg32(STM32_RCC_BASE + 0x0054, 0, (1 << 6));
+  modifyreg32(STM32_RCC_HSECFGR, 0, RCC_HSECFGR_HSEDIV2SEL);
 
   /* Enable HSE oscillator — needed as USB PHY reference clock.
    * Nucleo-N657X0-Q has 48 MHz crystal oscillator.
@@ -5685,9 +5681,7 @@ void arm_usbinitialize(void)
    */
 
 #define STM32_UCPD1_BASE    0x5000FC00
-#define STM32_RCC_APB1ENR2_OFFSET  0x0268
-#define STM32_RCC_APB1ENSR2_OFFSET 0x0A68
-  putreg32((1 << 0), STM32_RCC_BASE + STM32_RCC_APB1ENSR2_OFFSET);
+  putreg32((1 << 0), STM32_RCC_APB1ENSR2);
   up_udelay(10);
 
   /* Configure UCPD1: SNK mode (ANAMODE=1), enable both CC pins */
@@ -5699,12 +5693,22 @@ void arm_usbinitialize(void)
     putreg32(ucpd_cr, STM32_UCPD1_BASE + 0x00);  /* UCPD_CR */
   }
 
-  /* Follow exact Zephyr N6 USB init sequence:
+  /* USB OTG HS PHY init sequence — follows ST HAL CDC ACM example.
    *
-   * 1. Configure CCIPR6 PHY reference clock mux (HSE/2 direct)
-   * 2. Enable OTG1 controller clock (AHB5 bit 26)
-   * 3. Set USBPHYC FSEL=24MHz (read-modify-write, preserve defaults)
-   * 4. Enable OTGPHY1 clock (AHB5 bit 27) — AFTER FSEL per Zephyr
+   * The STM32N6 requires a specific reset-configure-release sequence
+   * for the USB PHY to properly lock its PLL and enable the TX path.
+   * Without this, RX works but TX outputs garbled signals.
+   *
+   * Order:
+   *  1. Configure CCIPR6 PHY reference clock mux
+   *  2. Enable AHB5 bus + OTG1 + OTGPHY1 clocks
+   *  3. Assert reset on OTG1PHYCTL + OTG1 + OTGPHY1
+   *  4. Release OTG1PHYCTL reset first
+   *  5. Wait for PHY clocks to stabilize
+   *  6. Configure USBPHYC_CR (FSEL, OTGDISABLE0, CMN, RETENABLEN1)
+   *  7. Release OTGPHY1 reset
+   *  8. Wait for PHY PLL lock
+   *  9. Release OTG1 reset
    */
 
   /* Step 1: CCIPR6 — configure PHY clocks.
@@ -5724,45 +5728,86 @@ void arm_usbinitialize(void)
   modifyreg32(STM32_RCC_CCIPR6, 0, RCC_CCIPR6_OTGPHY2CKREFSEL);
 #endif
 
-  /* Step 2: Enable AHB5 bus clock + OTG1 controller clock.
-   * The AHB5 bus clock (BUSENR bit 7) must be enabled for the
-   * USB OTG internal FIFO/DMA logic to function.
+  /* Step 2: Enable AHB5 bus clock + OTG1 + OTGPHY1 clocks.
+   * All clocks must be running before we can reset the peripherals.
    */
 
   putreg32(RCC_BUSENR_AHB5EN, STM32_RCC_BUSENSR);
 
 #ifdef CONFIG_STM32N6_USB1_USBDEV
-  putreg32(RCC_AHB5ENR_OTG1EN, STM32_RCC_AHB5ENSR);
+  putreg32(RCC_AHB5ENR_OTG1EN | RCC_AHB5ENR_OTGPHY1EN,
+           STM32_RCC_AHB5ENSR);
 #else
-  putreg32(RCC_AHB5ENR_OTG2EN, STM32_RCC_AHB5ENSR);
+  putreg32(RCC_AHB5ENR_OTG2EN | RCC_AHB5ENR_OTGPHY2EN,
+           STM32_RCC_AHB5ENSR);
 #endif
 
-  /* Step 3: Configure USBPHYC FSEL — read-modify-write like Zephyr.
-   * FSEL_24MHZ = bits[5:4] = 0b10 (value 0x20).
-   * Preserve any reset-default bits in the register.
+  /* Step 3: Assert reset on all three USB blocks via AHB5RSTSR
+   * (write-1-to-set). This puts PHY + controller into clean reset state.
    */
 
-  {
-    uint32_t phycr;
-    phycr = getreg32(STM32_USBPHYC_BASE + STM32_USBPHYC_CR_OFFSET);
-    phycr &= ~USBPHYC_CR_FSEL_MASK;
-    phycr &= ~USBPHYC_CR_OTGDISABLE0;   /* Clear OTG disable (reset default=1!) */
-    phycr |= USBPHYC_CR_FSEL_24MHZ;     /* Reference = HSE/2 = 24 MHz */
-    /* Keep RETENABLEN1 + CMN at reset defaults (required for PHY) */
-    putreg32(phycr, STM32_USBPHYC_BASE + STM32_USBPHYC_CR_OFFSET);
-  }
-
-  /* Step 4: Enable OTGPHY1 clock — AFTER FSEL is set */
-
 #ifdef CONFIG_STM32N6_USB1_USBDEV
-  putreg32(RCC_AHB5ENR_OTGPHY1EN, STM32_RCC_AHB5ENSR);
+  putreg32(RCC_AHB5RSTR_OTG1PHYCTLRST |
+           RCC_AHB5RSTR_OTG1RST |
+           RCC_AHB5RSTR_OTGPHY1RST,
+           STM32_RCC_AHB5RSTSR);
 #else
-  putreg32(RCC_AHB5ENR_OTGPHY2EN, STM32_RCC_AHB5ENSR);
+  putreg32(RCC_AHB5RSTR_OTG2PHYCTLRST |
+           RCC_AHB5RSTR_OTG2RST |
+           RCC_AHB5RSTR_OTGPHY2RST,
+           STM32_RCC_AHB5RSTSR);
 #endif
 
-  /* Delay for PHY PLL to lock */
+  /* Step 4: Release OTG1PHYCTL reset first (via AHB5RSTCR write-1-to-clear).
+   * The PHY controller register block must be accessible before configuring.
+   */
 
-  up_mdelay(5);
+#ifdef CONFIG_STM32N6_USB1_USBDEV
+  putreg32(RCC_AHB5RSTR_OTG1PHYCTLRST, STM32_RCC_AHB5RSTCR);
+#else
+  putreg32(RCC_AHB5RSTR_OTG2PHYCTLRST, STM32_RCC_AHB5RSTCR);
+#endif
+
+  /* Step 5: Wait for PHY controller to come out of reset */
+
+  up_mdelay(1);
+
+  /* Step 6: Configure USBPHYC_CR while OTG1 and OTGPHY1 are still in reset.
+   * This ensures the PHY PLL sees correct reference frequency at release.
+   *
+   * Per ST HAL example: OTGDISABLE0=1 for device-only mode (disables OTG
+   * protocol negotiation), FSEL=24MHz, CMN=1, RETENABLEN1=1.
+   */
+
+  putreg32(USBPHYC_CR_OTGDISABLE0 |    /* Disable OTG (device-only) */
+           USBPHYC_CR_FSEL_24MHZ |      /* Reference = HSE/2 = 24 MHz */
+           USBPHYC_CR_CMN |             /* Common block powered */
+           USBPHYC_CR_RETENABLEN1,      /* Retention mode enable */
+           STM32_USBPHYC_BASE + STM32_USBPHYC_CR_OFFSET);
+
+  /* Step 7: Release OTGPHY1 reset — PHY PLL starts locking */
+
+#ifdef CONFIG_STM32N6_USB1_USBDEV
+  putreg32(RCC_AHB5RSTR_OTGPHY1RST, STM32_RCC_AHB5RSTCR);
+#else
+  putreg32(RCC_AHB5RSTR_OTGPHY2RST, STM32_RCC_AHB5RSTCR);
+#endif
+
+  /* Step 8: Wait for PHY PLL to lock */
+
+  up_mdelay(1);
+
+  /* Step 9: Release OTG1 controller reset — DWC2 core comes online */
+
+#ifdef CONFIG_STM32N6_USB1_USBDEV
+  putreg32(RCC_AHB5RSTR_OTG1RST, STM32_RCC_AHB5RSTCR);
+#else
+  putreg32(RCC_AHB5RSTR_OTG2RST, STM32_RCC_AHB5RSTCR);
+#endif
+
+  /* Allow core to stabilize after reset release */
+
+  up_mdelay(2);
 
   /* Initialize software data structures */
 
