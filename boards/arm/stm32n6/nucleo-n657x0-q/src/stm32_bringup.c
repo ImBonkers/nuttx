@@ -33,6 +33,9 @@
 
 #include <nuttx/board.h>
 #include <nuttx/spi/spi_transfer.h>
+#ifdef CONFIG_CDCACM
+#include <nuttx/usb/cdcacm.h>
+#endif
 
 #include "arm_internal.h"
 #include "stm32_gpio.h"
@@ -100,6 +103,16 @@ int stm32_bringup(void)
           }
       }
   }
+#endif
+
+#if defined(CONFIG_CDCACM) && !defined(CONFIG_CDCACM_CONSOLE)
+  /* Register CDC/ACM serial device as /dev/ttyACM0 */
+
+  ret = cdcacm_initialize(0, NULL);
+  if (ret < 0)
+    {
+      ferr("ERROR: cdcacm_initialize failed: %d\n", ret);
+    }
 #endif
 
   UNUSED(ret);

@@ -207,4 +207,61 @@ config STM32N6_HPDMA1
 	select STM32N6_DMA
 	select ARCH_DMA
 
+config STM32N6_USB1_OTG_HS
+	bool "USB1 OTG HS"
+	default n
+	select USBHOST_HAVE_ASYNCH if USBHOST
+
+config STM32N6_USB2_OTG_HS
+	bool "USB2 OTG HS"
+	default n
+	select USBHOST_HAVE_ASYNCH if USBHOST
+
+endmenu
+
+menu "USB OTG Configuration"
+	depends on STM32N6_USB1_OTG_HS || STM32N6_USB2_OTG_HS
+
+choice
+	prompt "USB1 role"
+	depends on STM32N6_USB1_OTG_HS
+	default STM32N6_USB1_USBDEV if USBDEV
+
+config STM32N6_USB1_USBDEV
+	bool "Device mode"
+	depends on USBDEV
+
+config STM32N6_USB1_USBHOST
+	bool "Host mode"
+	depends on USBHOST
+
+endchoice
+
+choice
+	prompt "USB2 role"
+	depends on STM32N6_USB2_OTG_HS
+	default STM32N6_USB2_USBDEV if USBDEV
+
+config STM32N6_USB2_USBDEV
+	bool "Device mode"
+	depends on USBDEV
+
+config STM32N6_USB2_USBHOST
+	bool "Host mode"
+	depends on USBHOST
+
+endchoice
+
+config STM32N6_OTG_VBUS_SENSING
+	bool "USB VBUS sensing"
+	default n
+	---help---
+		Enable VBUS sensing via analog comparator.
+		If disabled, VBUS valid is overridden in software.
+
+config STM32N6_USBDEV_REGDEBUG
+	bool "USB device register debug"
+	depends on USBDEV && DEBUG_USB_INFO
+	default n
+
 endmenu

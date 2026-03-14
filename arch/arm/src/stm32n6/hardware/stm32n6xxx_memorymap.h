@@ -128,8 +128,21 @@
 
 #define STM32_GPDMA1_BASE     0x50021000    /* GPDMA1 (AHB1, Secure) */
 
+/* AHB3 peripherals *********************************************************/
+
+#define STM32_RIFSC_BASE      0x54024000    /* RIFSC (AHB3, Secure) */
+
 /* AHB5 peripherals *********************************************************/
 
+#define STM32_AHB5_BASE       0x58020000    /* AHB5 (Secure) */
 #define STM32_HPDMA1_BASE     0x58020000    /* HPDMA1 (AHB5, Secure) */
+#define STM32_USB1_HS_PHYC_BASE 0x5803FC00  /* USB1 HS PHY controller (Secure) */
+#define STM32_USB1_OTG_HS_BASE  0x58040000  /* USB1 OTG HS (Secure) */
+#define STM32_USB2_OTG_HS_BASE  0x58080000  /* USB2 OTG HS (Secure) */
+#define STM32_USB2_HS_PHYC_BASE 0x580C0000  /* USB2 HS PHY controller (Secure) */
+
+/* SYSCFG *******************************************************************/
+
+#define STM32_SYSCFG_BASE     0x56008000    /* SYSCFG (Secure) */
 
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_MEMORYMAP_H */

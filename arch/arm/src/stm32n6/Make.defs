@@ -55,6 +55,14 @@ ifeq ($(CONFIG_ARM_MPU),y)
 CHIP_CSRCS += stm32_mpuinit.c
 endif
 
+ifeq ($(CONFIG_USBDEV),y)
+CHIP_CSRCS += stm32_otgdev.c
+endif
+
+ifeq ($(CONFIG_USBHOST),y)
+CHIP_CSRCS += stm32_otghost.c
+endif
+
 # Chip-specific RCC
 
 CHIP_CSRCS += stm32n6xx_rcc.c

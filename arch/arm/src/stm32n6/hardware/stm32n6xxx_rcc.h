@@ -149,6 +149,7 @@
 
 /* Kernel Clock Configuration Registers */
 
+#define STM32_RCC_CCIPR6_OFFSET        0x0158  /* Kernel clock config register 6 (USB PHY) */
 #define STM32_RCC_CCIPR9_OFFSET        0x0164  /* Kernel clock config register 9 (SPI) */
 
 /* RCC internal RIF security registers (per-bus access control) */
@@ -251,6 +252,7 @@
 
 /* Kernel clock configuration register addresses */
 
+#define STM32_RCC_CCIPR6       (STM32_RCC_BASE + STM32_RCC_CCIPR6_OFFSET)
 #define STM32_RCC_CCIPR9       (STM32_RCC_BASE + STM32_RCC_CCIPR9_OFFSET)
 
 /* RCC internal RIF security register addresses */
@@ -443,6 +445,10 @@
 /* AHB5 Peripheral Clock Enable Register (RCC_AHB5ENR) */
 
 #define RCC_AHB5ENR_HPDMA1EN      (1 << 0)   /* Bit 0:  HPDMA1 clock enable */
+#define RCC_AHB5ENR_OTG1EN        (1 << 26)  /* Bit 26: USB1 OTG controller clock enable */
+#define RCC_AHB5ENR_OTGPHY1EN     (1 << 27)  /* Bit 27: USB1 PHY clock enable */
+#define RCC_AHB5ENR_OTGPHY2EN     (1 << 28)  /* Bit 28: USB2 PHY clock enable */
+#define RCC_AHB5ENR_OTG2EN        (1 << 29)  /* Bit 29: USB2 OTG controller clock enable */
 #define RCC_AHB5ENR_CACHEAXIEN    (1 << 30)  /* Bit 30: CACHEAXI clock enable */
 
 /* RCC_SECCFGR4 - Bus security configuration (bit = 1 means secure-only) */
@@ -602,5 +608,26 @@
 #  define RCC_CCIPR9_SPI6SEL_IC9      (3 << RCC_CCIPR9_SPI6SEL_SHIFT)
 #  define RCC_CCIPR9_SPI6SEL_MSI      (4 << RCC_CCIPR9_SPI6SEL_SHIFT)
 #  define RCC_CCIPR9_SPI6SEL_HSI      (5 << RCC_CCIPR9_SPI6SEL_SHIFT)
+
+/* RCC_CCIPR6 - USB PHY clock source selection
+ *
+ * Two muxes per PHY:
+ *   OTGPHY1SEL (bits 13:12) - kernel clock source
+ *   OTGPHY1CKREFSEL (bit 16) - reference clock source
+ */
+
+#define RCC_CCIPR6_OTGPHY1SEL_SHIFT       (12)
+#define RCC_CCIPR6_OTGPHY1SEL_MASK        (3 << RCC_CCIPR6_OTGPHY1SEL_SHIFT)
+#  define RCC_CCIPR6_OTGPHY1SEL_HSE_DIV2  (0 << RCC_CCIPR6_OTGPHY1SEL_SHIFT) /* HSE/2 */
+#  define RCC_CCIPR6_OTGPHY1SEL_CLKP      (1 << RCC_CCIPR6_OTGPHY1SEL_SHIFT) /* CLKP */
+#  define RCC_CCIPR6_OTGPHY1SEL_IC15      (2 << RCC_CCIPR6_OTGPHY1SEL_SHIFT) /* IC15 */
+#  define RCC_CCIPR6_OTGPHY1SEL_HSE_DIV2_OSC (3 << RCC_CCIPR6_OTGPHY1SEL_SHIFT) /* HSE/2 direct from oscillator */
+
+#define RCC_CCIPR6_OTGPHY1CKREFSEL        (1 << 16) /* Bit 16: 0=from OTGPHY1SEL, 1=HSE/2 direct */
+
+#define RCC_CCIPR6_OTGPHY2SEL_SHIFT       (20)
+#define RCC_CCIPR6_OTGPHY2SEL_MASK        (3 << RCC_CCIPR6_OTGPHY2SEL_SHIFT)
+
+#define RCC_CCIPR6_OTGPHY2CKREFSEL        (1 << 24) /* Bit 24: 0=from OTGPHY2SEL, 1=HSE/2 direct */
 
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_RCC_H */

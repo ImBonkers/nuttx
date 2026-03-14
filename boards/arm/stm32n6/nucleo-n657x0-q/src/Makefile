@@ -43,6 +43,10 @@ ifeq ($(CONFIG_STM32N6_DMA),y)
 CSRCS += stm32_dmatest.c
 endif
 
+ifeq ($(CONFIG_USBDEV),y)
+CSRCS += stm32_usbdev.c
+endif
+
 ifeq ($(CONFIG_BOARDCTL),y)
 CSRCS += stm32_appinit.c
 endif
