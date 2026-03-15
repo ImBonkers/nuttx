@@ -39,24 +39,25 @@
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* ADC channel-to-pin mapping on NUCLEO-N657X0-Q (from DS14791 Table 18):
+/* ADC channel-to-pin mapping on NUCLEO-N657X0-Q:
  *
- *   PF11 -> ADC1_INP2   (Arduino D11 / SPI5_MOSI — shared)
- *   PF12 -> ADC1_INP6   (Arduino D12 / SPI5_MISO — shared)
- *   PF6  -> ADC1_INP15  (Arduino A2)
- *   PF7  -> ADC1_INP9   (morpho)
- *   PF3  -> ADC1_INP16  (morpho)
- *   PF4  -> ADC1_INP18  (morpho)
+ * The ADC operates on the 1.8V domain (VDDA18ADC).  Only pins on the
+ * 1.8V I/O domain connect properly to the ADC analog inputs.  The
+ * Arduino analog header pins (A0-A5) route through 3.3V domain pins
+ * by default and need solder bridge changes for ADC use (UM3417 Table 12).
  *
- * NOTE: PF5 (Arduino A0) has NO ADC function on STM32N6!
+ * Direct 1.8V ADC pins accessible on morpho connectors:
+ *   PA1  -> ADC12_INP1   (CN15 pin 38) — used by ST ADC example
+ *   PA8  -> ADC12_INP5   (Arduino A0 with SB mod)
+ *   PA9  -> ADC12_INP10  (Arduino A1 with SB mod)
+ *   PA10 -> ADC12_INP11  (Arduino A2 with SB mod)
  *
- * For initial testing, use internal VREFINT (ch17, ~1.21V)
- * and one external pin: PF6 = ADC1_INP15 (Arduino A2).
+ * IMPORTANT: Input voltage must be <= 1.8V on these pins!
  */
 
-#define GPIO_ADC1_IN15  (GPIO_ANALOG | GPIO_PORTF | GPIO_PIN6)
+#define GPIO_ADC1_IN1   (GPIO_ANALOG | GPIO_PORTA | GPIO_PIN1)
 
-#define ADC1_NCHANNELS  2
+#define ADC1_NCHANNELS  1
 
 /****************************************************************************
  * Private Data
@@ -64,8 +65,7 @@
 
 static const uint8_t g_adc1_chanlist[ADC1_NCHANNELS] =
 {
-  17,   /* VREFINT internal (~1.21V, needs CCR.VREFEN=1) */
-  15,   /* A2: PF6 = ADC1_INP15 */
+  1,    /* PA1 = ADC12_INP1 (morpho CN15 pin 38) */
 };
 
 /****************************************************************************
@@ -88,7 +88,25 @@ int stm32_adc_setup(void)
 
   /* Configure analog GPIO pin for external channel */
 
-  stm32_configgpio(GPIO_ADC1_IN15);
+  stm32_configgpio(GPIO_ADC1_IN1);
+
+  /* Configure security attributes for ADC analog path.
+   *
+   * On STM32N6 with TrustZone, both the ADC peripheral and the GPIO
+   * pin must have matching Secure attributes for the analog path to
+   * connect properly.
+   *
+   * 1) RIFSC: Mark ADC12 as Secure (RISC_SECCFGR2 bit 0)
+   * 2) GPIO:  Mark PA1 as Secure (GPIOA SECCFGR bit 1)
+   */
+
+  /* RIFSC ADC12 Secure: RISC_SECCFGR2 at RIFSC_BASE + 0x018, bit 0 */
+
+  modifyreg32(STM32_RIFSC_BASE + 0x018, 0, (1 << 0));
+
+  /* GPIO PA1 Secure: GPIOA_SECCFGR at GPIOA_BASE + 0x30, bit 1 */
+
+  modifyreg32(STM32_GPIOA_BASE + 0x30, 0, (1 << 1));
 
   /* Initialize ADC1 */
 
