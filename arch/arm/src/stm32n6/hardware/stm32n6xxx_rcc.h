@@ -101,14 +101,17 @@
 
 /* Peripheral Reset Registers */
 
+#define STM32_RCC_AHB1RSTR_OFFSET      0x0210  /* AHB1 peripheral reset register */
 #define STM32_RCC_AHB5RSTR_OFFSET      0x0220  /* AHB5 peripheral reset register */
 
 /* Atomic SET variants of reset registers (offset + 0x800) */
 
+#define STM32_RCC_AHB1RSTSR_OFFSET     0x0a10  /* AHB1 reset SET register */
 #define STM32_RCC_AHB5RSTSR_OFFSET     0x0a20  /* AHB5 reset SET register */
 
 /* Atomic CLEAR variants of reset registers (offset + 0x1000) */
 
+#define STM32_RCC_AHB1RSTCR_OFFSET     0x1210  /* AHB1 reset CLEAR register */
 #define STM32_RCC_AHB5RSTCR_OFFSET     0x1220  /* AHB5 reset CLEAR register */
 
 /* Misc enable registers (before clock enable registers) */
@@ -165,6 +168,7 @@
 
 /* Kernel Clock Configuration Registers */
 
+#define STM32_RCC_CCIPR1_OFFSET        0x0144  /* Kernel clock config register 1 (ADC) */
 #define STM32_RCC_CCIPR6_OFFSET        0x0158  /* Kernel clock config register 6 (USB PHY) */
 #define STM32_RCC_CCIPR9_OFFSET        0x0164  /* Kernel clock config register 9 (SPI) */
 
@@ -223,6 +227,10 @@
 #define STM32_RCC_IC19CFGR     (STM32_RCC_BASE + STM32_RCC_IC19CFGR_OFFSET)
 #define STM32_RCC_IC20CFGR     (STM32_RCC_BASE + STM32_RCC_IC20CFGR_OFFSET)
 
+#define STM32_RCC_AHB1RSTR     (STM32_RCC_BASE + STM32_RCC_AHB1RSTR_OFFSET)
+#define STM32_RCC_AHB1RSTSR    (STM32_RCC_BASE + STM32_RCC_AHB1RSTSR_OFFSET)
+#define STM32_RCC_AHB1RSTCR    (STM32_RCC_BASE + STM32_RCC_AHB1RSTCR_OFFSET)
+
 #define STM32_RCC_AHB5RSTR     (STM32_RCC_BASE + STM32_RCC_AHB5RSTR_OFFSET)
 #define STM32_RCC_AHB5RSTSR    (STM32_RCC_BASE + STM32_RCC_AHB5RSTSR_OFFSET)
 #define STM32_RCC_AHB5RSTCR    (STM32_RCC_BASE + STM32_RCC_AHB5RSTCR_OFFSET)
@@ -273,6 +281,7 @@
 
 /* Kernel clock configuration register addresses */
 
+#define STM32_RCC_CCIPR1       (STM32_RCC_BASE + STM32_RCC_CCIPR1_OFFSET)
 #define STM32_RCC_CCIPR6       (STM32_RCC_BASE + STM32_RCC_CCIPR6_OFFSET)
 #define STM32_RCC_CCIPR9       (STM32_RCC_BASE + STM32_RCC_CCIPR9_OFFSET)
 
@@ -451,6 +460,11 @@
 /* AHB1 Peripheral Clock Enable Register (RCC_AHB1ENR) */
 
 #define RCC_AHB1ENR_GPDMA1EN      (1 << 4)   /* Bit 4:  GPDMA1 clock enable */
+#define RCC_AHB1ENR_ADC12EN       (1 << 5)   /* Bit 5:  ADC1/ADC2 clock enable */
+
+/* AHB1 Peripheral Reset Register (RCC_AHB1RSTR) */
+
+#define RCC_AHB1RSTR_ADC12RST     (1 << 5)   /* Bit 5:  ADC1/ADC2 reset */
 
 /* AHB3 Peripheral Clock Enable Register (RCC_AHB3ENR) */
 
@@ -663,5 +677,30 @@
 #define RCC_CCIPR6_OTGPHY2SEL_MASK        (3 << RCC_CCIPR6_OTGPHY2SEL_SHIFT)
 
 #define RCC_CCIPR6_OTGPHY2CKREFSEL        (1 << 24) /* Bit 24: 0=from OTGPHY2SEL, 1=HSE/2 direct */
+
+/* RCC_CCIPR1 - ADC kernel clock source selection
+ *
+ * ADC12SEL (bits 6:4): kernel clock for ADC1/ADC2
+ *   0 = PCLK
+ *   1 = CLKP
+ *   2 = IC7
+ *   3 = IC8
+ *   4 = MSI
+ *   5 = HSI
+ *
+ * ADCPRE (bits 15:8): ADC bus slave clock prescaler
+ */
+
+#define RCC_CCIPR1_ADC12SEL_SHIFT     (4)
+#define RCC_CCIPR1_ADC12SEL_MASK      (7 << RCC_CCIPR1_ADC12SEL_SHIFT)
+#  define RCC_CCIPR1_ADC12SEL_PCLK    (0 << RCC_CCIPR1_ADC12SEL_SHIFT)
+#  define RCC_CCIPR1_ADC12SEL_CLKP    (1 << RCC_CCIPR1_ADC12SEL_SHIFT)
+#  define RCC_CCIPR1_ADC12SEL_IC7     (2 << RCC_CCIPR1_ADC12SEL_SHIFT)
+#  define RCC_CCIPR1_ADC12SEL_IC8     (3 << RCC_CCIPR1_ADC12SEL_SHIFT)
+#  define RCC_CCIPR1_ADC12SEL_MSI     (4 << RCC_CCIPR1_ADC12SEL_SHIFT)
+#  define RCC_CCIPR1_ADC12SEL_HSI     (5 << RCC_CCIPR1_ADC12SEL_SHIFT)
+
+#define RCC_CCIPR1_ADCPRE_SHIFT       (8)
+#define RCC_CCIPR1_ADCPRE_MASK        (0xff << RCC_CCIPR1_ADCPRE_SHIFT)
 
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_RCC_H */

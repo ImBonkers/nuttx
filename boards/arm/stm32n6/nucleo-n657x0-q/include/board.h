@@ -57,6 +57,10 @@
 #define STM32_PCLK1_FREQUENCY   200000000ul  /* HCLK / PPRE1(1) = 200 MHz */
 #define STM32_PCLK2_FREQUENCY   200000000ul  /* HCLK / PPRE2(1) = 200 MHz */
 
+/* ADC kernel clock = HSI (64 MHz) via RCC_CCIPR1 ADC12SEL */
+
+#define STM32_ADC_CLK_FREQUENCY 64000000ul
+
 #define BOARD_LOOPSPERMSEC      75000
 
 /* LED definitions **********************************************************/

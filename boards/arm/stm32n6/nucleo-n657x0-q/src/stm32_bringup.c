@@ -42,6 +42,9 @@
 #include "stm32_gpio.h"
 #include "stm32_spi.h"
 #include "stm32_i2c.h"
+#ifdef CONFIG_STM32N6_ADC
+#include "stm32_adc.h"
+#endif
 #include "nucleo-n657x0-q.h"
 
 #include <arch/board/board.h>
@@ -88,6 +91,16 @@ int stm32_bringup(void)
   if (ret < 0)
     {
       ferr("ERROR: Failed to mount procfs at /proc: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_STM32N6_ADC1
+  /* Initialize ADC1 and register as /dev/adc0 */
+
+  ret = stm32_adc_setup();
+  if (ret < 0)
+    {
+      ferr("ERROR: stm32_adc_setup failed: %d\n", ret);
     }
 #endif
 

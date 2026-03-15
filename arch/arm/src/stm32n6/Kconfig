@@ -218,6 +218,24 @@ config STM32N6_SPI_DMATHRESHOLD
 
 endmenu
 
+config STM32N6_ADC
+	bool
+	default n
+
+config STM32N6_ADC1
+	bool "ADC1"
+	default n
+	select STM32N6_ADC
+	select ADC
+	select ANALOG
+
+config STM32N6_ADC2
+	bool "ADC2"
+	default n
+	select STM32N6_ADC
+	select ADC
+	select ANALOG
+
 config STM32N6_DMA
 	bool
 	default n

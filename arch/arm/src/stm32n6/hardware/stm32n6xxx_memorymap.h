@@ -127,6 +127,9 @@
 /* AHB1 peripherals *********************************************************/
 
 #define STM32_GPDMA1_BASE     0x50021000    /* GPDMA1 (AHB1, Secure) */
+#define STM32_ADC1_BASE       0x50022000    /* ADC1 (AHB1, Secure) */
+#define STM32_ADC2_BASE       0x50022100    /* ADC2 (AHB1, Secure) */
+#define STM32_ADC12_COMMON_BASE 0x50022300  /* ADC1/2 common (AHB1, Secure) */
 
 /* AHB3 peripherals *********************************************************/
 

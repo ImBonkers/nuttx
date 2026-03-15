@@ -148,4 +148,15 @@
 #define GPIO_I2C4_SCL_1    (GPIO_ALT | GPIO_AF4 | GPIO_SPEED_50MHZ | GPIO_OPENDRAIN | GPIO_PORTD | GPIO_PIN12)
 #define GPIO_I2C4_SDA_1    (GPIO_ALT | GPIO_AF4 | GPIO_SPEED_50MHZ | GPIO_OPENDRAIN | GPIO_PORTD | GPIO_PIN13)
 
+/* ADC Analog Pin Definitions **********************************************
+ *
+ * ADC pins use GPIO analog mode (MODER=11).  No alternate function needed.
+ * Channel assignments from STM32N657 datasheet.
+ */
+
+#define GPIO_ADC1_INP5     (GPIO_ANALOG | GPIO_PORTF | GPIO_PIN5)   /* A0 */
+#define GPIO_ADC1_INP10    (GPIO_ANALOG | GPIO_PORTC | GPIO_PIN10)  /* A1 */
+#define GPIO_ADC1_INP11    (GPIO_ANALOG | GPIO_PORTF | GPIO_PIN6)   /* A2 */
+#define GPIO_ADC1_INP13    (GPIO_ANALOG | GPIO_PORTA | GPIO_PIN2)   /* A3 */
+
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_PINMAP_H */
