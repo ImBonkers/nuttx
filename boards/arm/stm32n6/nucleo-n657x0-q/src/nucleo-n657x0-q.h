@@ -103,6 +103,10 @@ int stm32_bringup(void);
 int stm32_adc_setup(void);
 #endif
 
+#ifdef CONFIG_STM32N6_PWM
+int stm32_pwm_setup(void);
+#endif
+
 #ifdef CONFIG_STM32N6_DMA
 int stm32_dmatest_main(int argc, char *argv[]);
 #endif

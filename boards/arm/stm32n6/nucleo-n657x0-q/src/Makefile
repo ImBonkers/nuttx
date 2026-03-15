@@ -47,6 +47,10 @@ ifeq ($(CONFIG_STM32N6_ADC),y)
 CSRCS += stm32_adc.c
 endif
 
+ifeq ($(CONFIG_STM32N6_PWM),y)
+CSRCS += stm32_pwm.c
+endif
+
 ifeq ($(CONFIG_USBDEV),y)
 CSRCS += stm32_usbdev.c
 endif

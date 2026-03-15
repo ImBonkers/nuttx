@@ -59,6 +59,10 @@ ifeq ($(CONFIG_STM32N6_DMA),y)
 CHIP_CSRCS += stm32_dma.c
 endif
 
+ifeq ($(CONFIG_STM32N6_PWM),y)
+CHIP_CSRCS += stm32_pwm.c
+endif
+
 ifeq ($(CONFIG_ARM_MPU),y)
 CHIP_CSRCS += stm32_mpuinit.c
 endif

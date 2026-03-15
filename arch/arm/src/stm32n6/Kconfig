@@ -36,6 +36,38 @@ endchoice
 
 menu "STM32N6 Peripheral Selection"
 
+config STM32N6_TIM1
+	bool "TIM1"
+	default n
+
+config STM32N6_TIM3
+	bool "TIM3"
+	default n
+
+config STM32N6_TIM4
+	bool "TIM4"
+	default n
+
+config STM32N6_TIM5
+	bool "TIM5"
+	default n
+
+config STM32N6_TIM8
+	bool "TIM8"
+	default n
+
+config STM32N6_TIM15
+	bool "TIM15"
+	default n
+
+config STM32N6_TIM16
+	bool "TIM16"
+	default n
+
+config STM32N6_TIM17
+	bool "TIM17"
+	default n
+
 config STM32N6_USART1
 	bool "USART1"
 	default n
@@ -308,5 +340,123 @@ config STM32N6_USBDEV_REGDEBUG
 	bool "USB device register debug"
 	depends on USBDEV && DEBUG_USB_INFO
 	default n
+
+endmenu
+
+menu "PWM Configuration"
+
+config STM32N6_PWM
+	bool
+	default n
+
+config STM32N6_TIM1_PWM
+	bool "TIM1 PWM"
+	default n
+	depends on STM32N6_TIM1
+	select PWM
+	select STM32N6_PWM
+
+config STM32N6_TIM1_CHANNEL
+	int "TIM1 PWM output channel"
+	default 1
+	range 1 4
+	depends on STM32N6_TIM1_PWM
+
+config STM32N6_TIM1_CHMODE
+	int "TIM1 PWM channel mode"
+	default 6
+	depends on STM32N6_TIM1_PWM
+
+config STM32N6_TIM1_CH1OUT
+	bool "TIM1 CH1 output"
+	default y
+	depends on STM32N6_TIM1_PWM
+
+config STM32N6_TIM3_PWM
+	bool "TIM3 PWM"
+	default n
+	depends on STM32N6_TIM3
+	select PWM
+	select STM32N6_PWM
+
+config STM32N6_TIM3_CHANNEL
+	int "TIM3 PWM output channel"
+	default 1
+	range 1 4
+	depends on STM32N6_TIM3_PWM
+
+config STM32N6_TIM3_CHMODE
+	int "TIM3 PWM channel mode"
+	default 6
+	depends on STM32N6_TIM3_PWM
+
+config STM32N6_TIM4_PWM
+	bool "TIM4 PWM"
+	default n
+	depends on STM32N6_TIM4
+	select PWM
+	select STM32N6_PWM
+
+config STM32N6_TIM4_CHANNEL
+	int "TIM4 PWM output channel"
+	default 1
+	range 1 4
+	depends on STM32N6_TIM4_PWM
+
+config STM32N6_TIM4_CHMODE
+	int "TIM4 PWM channel mode"
+	default 6
+	depends on STM32N6_TIM4_PWM
+
+config STM32N6_TIM5_PWM
+	bool "TIM5 PWM"
+	default n
+	depends on STM32N6_TIM5
+	select PWM
+	select STM32N6_PWM
+
+config STM32N6_TIM5_CHANNEL
+	int "TIM5 PWM output channel"
+	default 1
+	range 1 4
+	depends on STM32N6_TIM5_PWM
+
+config STM32N6_TIM5_CHMODE
+	int "TIM5 PWM channel mode"
+	default 6
+	depends on STM32N6_TIM5_PWM
+
+config STM32N6_TIM8_PWM
+	bool "TIM8 PWM"
+	default n
+	depends on STM32N6_TIM8
+	select PWM
+	select STM32N6_PWM
+
+config STM32N6_TIM8_CHANNEL
+	int "TIM8 PWM output channel"
+	default 1
+	range 1 4
+	depends on STM32N6_TIM8_PWM
+
+config STM32N6_TIM8_CHMODE
+	int "TIM8 PWM channel mode"
+	default 6
+	depends on STM32N6_TIM8_PWM
+
+config STM32N6_TIM3_CH1OUT
+	bool "TIM3 CH1 output"
+	default y
+	depends on STM32N6_TIM3_PWM
+
+config STM32N6_TIM4_CH1OUT
+	bool "TIM4 CH1 output"
+	default y
+	depends on STM32N6_TIM4_PWM
+
+config STM32N6_PWM_LL_OPS
+	bool "PWM low-level operations"
+	default n
+	depends on STM32N6_PWM
 
 endmenu

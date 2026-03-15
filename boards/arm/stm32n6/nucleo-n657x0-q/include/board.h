@@ -165,6 +165,31 @@
 #define GPIO_I2C2_SCL    GPIO_I2C2_SCL_1
 #define GPIO_I2C2_SDA    GPIO_I2C2_SDA_1
 
+/* PWM GPIOs ****************************************************************/
+
+/* TIM1: PE9=CH1 (AF1) — Arduino D3 (CN13 pin 4)
+ * This is the primary PWM output for testing.
+ */
+
+#define GPIO_TIM1_CH1OUT  GPIO_TIM1_CH1OUT_2
+#define GPIO_TIM1_CH2OUT  GPIO_TIM1_CH2OUT_2
+#define GPIO_TIM1_CH3OUT  GPIO_TIM1_CH3OUT_2
+#define GPIO_TIM1_CH4OUT  GPIO_TIM1_CH4OUT_2
+
+/* TIM3: PA6=CH1 (AF2) */
+
+#define GPIO_TIM3_CH1OUT  GPIO_TIM3_CH1OUT_1
+#define GPIO_TIM3_CH2OUT  GPIO_TIM3_CH2OUT_1
+#define GPIO_TIM3_CH3OUT  GPIO_TIM3_CH3OUT_1
+#define GPIO_TIM3_CH4OUT  GPIO_TIM3_CH4OUT_1
+
+/* TIM4: PB6=CH1 (AF2), PB7=CH2, PB8=CH3, PB9=CH4 — morpho header */
+
+#define GPIO_TIM4_CH1OUT  GPIO_TIM4_CH1OUT_1
+#define GPIO_TIM4_CH2OUT  GPIO_TIM4_CH2OUT_1
+#define GPIO_TIM4_CH3OUT  GPIO_TIM4_CH3OUT_1
+#define GPIO_TIM4_CH4OUT  GPIO_TIM4_CH4OUT_1
+
 /****************************************************************************
  * Public Data
  ****************************************************************************/

@@ -103,16 +103,25 @@
 
 #define STM32_RCC_AHB1RSTR_OFFSET      0x0210  /* AHB1 peripheral reset register */
 #define STM32_RCC_AHB5RSTR_OFFSET      0x0220  /* AHB5 peripheral reset register */
+#define STM32_RCC_APB1RSTR1_OFFSET     0x0224  /* APB1 peripheral reset register 1 */
+#define STM32_RCC_APB1RSTR2_OFFSET     0x0228  /* APB1 peripheral reset register 2 */
+#define STM32_RCC_APB2RSTR_OFFSET      0x022c  /* APB2 peripheral reset register */
 
 /* Atomic SET variants of reset registers (offset + 0x800) */
 
 #define STM32_RCC_AHB1RSTSR_OFFSET     0x0a10  /* AHB1 reset SET register */
 #define STM32_RCC_AHB5RSTSR_OFFSET     0x0a20  /* AHB5 reset SET register */
+#define STM32_RCC_APB1RSTSR1_OFFSET    0x0a24  /* APB1 reset SET register 1 */
+#define STM32_RCC_APB1RSTSR2_OFFSET    0x0a28  /* APB1 reset SET register 2 */
+#define STM32_RCC_APB2RSTSR_OFFSET     0x0a2c  /* APB2 reset SET register */
 
 /* Atomic CLEAR variants of reset registers (offset + 0x1000) */
 
 #define STM32_RCC_AHB1RSTCR_OFFSET     0x1210  /* AHB1 reset CLEAR register */
 #define STM32_RCC_AHB5RSTCR_OFFSET     0x1220  /* AHB5 reset CLEAR register */
+#define STM32_RCC_APB1RSTCR1_OFFSET    0x1224  /* APB1 reset CLEAR register 1 */
+#define STM32_RCC_APB1RSTCR2_OFFSET    0x1228  /* APB1 reset CLEAR register 2 */
+#define STM32_RCC_APB2RSTCR_OFFSET     0x122c  /* APB2 reset CLEAR register */
 
 /* Misc enable registers (before clock enable registers) */
 
@@ -234,6 +243,13 @@
 #define STM32_RCC_AHB5RSTR     (STM32_RCC_BASE + STM32_RCC_AHB5RSTR_OFFSET)
 #define STM32_RCC_AHB5RSTSR    (STM32_RCC_BASE + STM32_RCC_AHB5RSTSR_OFFSET)
 #define STM32_RCC_AHB5RSTCR    (STM32_RCC_BASE + STM32_RCC_AHB5RSTCR_OFFSET)
+
+#define STM32_RCC_APB1RSTR1    (STM32_RCC_BASE + STM32_RCC_APB1RSTR1_OFFSET)
+#define STM32_RCC_APB1RSTSR1   (STM32_RCC_BASE + STM32_RCC_APB1RSTSR1_OFFSET)
+#define STM32_RCC_APB1RSTCR1   (STM32_RCC_BASE + STM32_RCC_APB1RSTCR1_OFFSET)
+#define STM32_RCC_APB2RSTR     (STM32_RCC_BASE + STM32_RCC_APB2RSTR_OFFSET)
+#define STM32_RCC_APB2RSTSR    (STM32_RCC_BASE + STM32_RCC_APB2RSTSR_OFFSET)
+#define STM32_RCC_APB2RSTCR    (STM32_RCC_BASE + STM32_RCC_APB2RSTCR_OFFSET)
 
 #define STM32_RCC_DIVENR       (STM32_RCC_BASE + STM32_RCC_DIVENR_OFFSET)
 #define STM32_RCC_DIVENSR      (STM32_RCC_BASE + STM32_RCC_DIVENSR_OFFSET)
@@ -498,6 +514,23 @@
 #define RCC_AHB5RSTR_OTGPHY1RST      (1 << 27)  /* Bit 27: USB1 PHY reset */
 #define RCC_AHB5RSTR_OTGPHY2RST      (1 << 28)  /* Bit 28: USB2 PHY reset */
 #define RCC_AHB5RSTR_OTG2RST         (1 << 29)  /* Bit 29: USB2 OTG controller reset */
+
+/* APB1 Peripheral Reset Register 1 (RCC_APB1RSTR1) */
+
+#define RCC_APB1RSTR1_TIM2RST     (1 << 0)   /* Bit 0:  TIM2 reset */
+#define RCC_APB1RSTR1_TIM3RST     (1 << 1)   /* Bit 1:  TIM3 reset */
+#define RCC_APB1RSTR1_TIM4RST     (1 << 2)   /* Bit 2:  TIM4 reset */
+#define RCC_APB1RSTR1_TIM5RST     (1 << 3)   /* Bit 3:  TIM5 reset */
+#define RCC_APB1RSTR1_TIM6RST     (1 << 4)   /* Bit 4:  TIM6 reset */
+#define RCC_APB1RSTR1_TIM7RST     (1 << 5)   /* Bit 5:  TIM7 reset */
+
+/* APB2 Peripheral Reset Register (RCC_APB2RSTR) */
+
+#define RCC_APB2RSTR_TIM1RST      (1 << 0)   /* Bit 0:  TIM1 reset */
+#define RCC_APB2RSTR_TIM8RST      (1 << 1)   /* Bit 1:  TIM8 reset */
+#define RCC_APB2RSTR_TIM15RST     (1 << 16)  /* Bit 16: TIM15 reset */
+#define RCC_APB2RSTR_TIM16RST     (1 << 17)  /* Bit 17: TIM16 reset */
+#define RCC_APB2RSTR_TIM17RST     (1 << 18)  /* Bit 18: TIM17 reset */
 
 /* RCC_SECCFGR4 - Bus security configuration (bit = 1 means secure-only) */
 

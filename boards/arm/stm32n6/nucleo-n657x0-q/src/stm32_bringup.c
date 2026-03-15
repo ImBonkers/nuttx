@@ -45,6 +45,9 @@
 #ifdef CONFIG_STM32N6_ADC
 #include "stm32_adc.h"
 #endif
+#ifdef CONFIG_STM32N6_PWM
+#include "stm32_pwm.h"
+#endif
 #include "nucleo-n657x0-q.h"
 
 #include <arch/board/board.h>
@@ -101,6 +104,16 @@ int stm32_bringup(void)
   if (ret < 0)
     {
       ferr("ERROR: stm32_adc_setup failed: %d\n", ret);
+    }
+#endif
+
+#ifdef CONFIG_STM32N6_PWM
+  /* Initialize PWM and register as /dev/pwm0 */
+
+  ret = stm32_pwm_setup();
+  if (ret < 0)
+    {
+      ferr("ERROR: stm32_pwm_setup failed: %d\n", ret);
     }
 #endif
 
