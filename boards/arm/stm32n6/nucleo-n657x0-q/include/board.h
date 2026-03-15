@@ -57,6 +57,14 @@
 #define STM32_PCLK1_FREQUENCY   200000000ul  /* HCLK / PPRE1(1) = 200 MHz */
 #define STM32_PCLK2_FREQUENCY   200000000ul  /* HCLK / PPRE2(1) = 200 MHz */
 
+/* Timer input clock.  On STM32N6, RCC_CFGR2.TIMPRE[25:24] selects the
+ * timer group prescaler.  With TIMPRE=0 (default), timer clock = SYSCLK
+ * (not HCLK or PCLK).  TIMPRE=1 would give SYSCLK/2, etc.
+ */
+
+#define STM32_APB1_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY  /* 400 MHz */
+#define STM32_APB2_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY  /* 400 MHz */
+
 /* ADC kernel clock = HSI (64 MHz) via RCC_CCIPR1 ADC12SEL */
 
 #define STM32_ADC_CLK_FREQUENCY 64000000ul

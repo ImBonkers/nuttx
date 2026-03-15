@@ -37,6 +37,10 @@
 #ifdef CONFIG_CDCACM
 #include <nuttx/usb/cdcacm.h>
 #endif
+#ifdef CONFIG_RTC_DRIVER
+#include <nuttx/timers/rtc.h>
+#include "stm32_rtc.h"
+#endif
 
 #include "arm_internal.h"
 #include "stm32_gpio.h"
@@ -95,6 +99,22 @@ int stm32_bringup(void)
     {
       ferr("ERROR: Failed to mount procfs at /proc: %d\n", ret);
     }
+#endif
+
+#ifdef CONFIG_RTC_DRIVER
+  /* Register /dev/rtc0 */
+
+  {
+    struct rtc_lowerhalf_s *lower = stm32_rtc_lowerhalf();
+    if (lower != NULL)
+      {
+        ret = rtc_initialize(0, lower);
+        if (ret < 0)
+          {
+            ferr("ERROR: rtc_initialize failed: %d\n", ret);
+          }
+      }
+  }
 #endif
 
 #ifdef CONFIG_STM32N6_ADC1

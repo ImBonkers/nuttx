@@ -76,11 +76,12 @@
 #define TIM_EGR_UG              (1 << 0)  /* Update generation */
 
 /* TIM2 auto-reload value for the desired tick rate.
- * APB1 timer clock = STM32_HCLK_FREQUENCY (no prescaler in Phase 1).
+ * On STM32N6, the timer input clock is controlled by RCC_CFGR2.TIMPRE.
+ * With TIMPRE=0 (default), timer clock = SYSCLK (400 MHz), not HCLK.
  * ARR = (timer_clock / CLK_TCK) - 1
  */
 
-#define TIM2_RELOAD ((STM32_HCLK_FREQUENCY / CLK_TCK) - 1)
+#define TIM2_RELOAD ((STM32_APB1_TIM_FREQUENCY / CLK_TCK) - 1)
 
 /****************************************************************************
  * Private Functions

@@ -37,6 +37,47 @@
  ****************************************************************************/
 
 /****************************************************************************
+ * Name: stm32_pwr_enablebkp
+ *
+ * Description:
+ *   Enables write access to the backup domain (RTC registers, RTC backup
+ *   data registers and backup SRAM).
+ *
+ * Input Parameters:
+ *   writable - True: enable ability to write to backup domain registers
+ *
+ * Returned Value:
+ *   True: The backup domain was previously writable.
+ *
+ ****************************************************************************/
+
+bool stm32_pwr_enablebkp(bool writable)
+{
+  uint32_t regval;
+  bool waswritable;
+
+  /* Get the current state of the PWR_DBPCR register */
+
+  regval = getreg32(STM32_PWR_DBPCR);
+  waswritable = ((regval & PWR_DBPCR_DBP) != 0);
+
+  /* Set or clear the DBP bit as requested */
+
+  if (writable)
+    {
+      regval |= PWR_DBPCR_DBP;
+    }
+  else
+    {
+      regval &= ~PWR_DBPCR_DBP;
+    }
+
+  putreg32(regval, STM32_PWR_DBPCR);
+
+  return waswritable;
+}
+
+/****************************************************************************
  * Name: stm32_pwr_enablevddio
  *
  * Description:

@@ -102,9 +102,9 @@
 #define STM32_LPTIM4_BASE     0x56002c00
 #define STM32_LPTIM5_BASE     0x56003000
 
-/* APB5 peripherals *********************************************************/
+/* APB4 peripherals (RTC on APB4 + 0x4000) **********************************/
 
-#define STM32_RTC_BASE        0x56008000
+#define STM32_RTC_BASE        0x56004000
 
 /* AHB4 peripherals *********************************************************/
 

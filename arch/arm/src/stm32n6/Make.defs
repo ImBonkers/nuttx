@@ -63,6 +63,13 @@ ifeq ($(CONFIG_STM32N6_PWM),y)
 CHIP_CSRCS += stm32_pwm.c
 endif
 
+ifeq ($(CONFIG_STM32N6_RTC),y)
+CHIP_CSRCS += stm32_rtc.c
+ifeq ($(CONFIG_RTC_DRIVER),y)
+CHIP_CSRCS += stm32_rtc_lowerhalf.c
+endif
+endif
+
 ifeq ($(CONFIG_ARM_MPU),y)
 CHIP_CSRCS += stm32_mpuinit.c
 endif

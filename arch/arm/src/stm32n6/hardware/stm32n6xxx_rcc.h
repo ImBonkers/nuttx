@@ -179,7 +179,12 @@
 
 #define STM32_RCC_CCIPR1_OFFSET        0x0144  /* Kernel clock config register 1 (ADC) */
 #define STM32_RCC_CCIPR6_OFFSET        0x0158  /* Kernel clock config register 6 (USB PHY) */
+#define STM32_RCC_CCIPR7_OFFSET        0x015c  /* Kernel clock config register 7 (RTC) */
 #define STM32_RCC_CCIPR9_OFFSET        0x0164  /* Kernel clock config register 9 (SPI) */
+
+/* Backup Domain Control Register */
+
+#define STM32_RCC_BDCR_OFFSET          0x002c  /* Backup domain control register */
 
 /* RCC internal RIF security registers (per-bus access control) */
 
@@ -299,7 +304,9 @@
 
 #define STM32_RCC_CCIPR1       (STM32_RCC_BASE + STM32_RCC_CCIPR1_OFFSET)
 #define STM32_RCC_CCIPR6       (STM32_RCC_BASE + STM32_RCC_CCIPR6_OFFSET)
+#define STM32_RCC_CCIPR7       (STM32_RCC_BASE + STM32_RCC_CCIPR7_OFFSET)
 #define STM32_RCC_CCIPR9       (STM32_RCC_BASE + STM32_RCC_CCIPR9_OFFSET)
+#define STM32_RCC_BDCR         (STM32_RCC_BASE + STM32_RCC_BDCR_OFFSET)
 
 /* RCC internal RIF security register addresses */
 
@@ -596,10 +603,7 @@
 #define RCC_APB4ENR_LPTIM3EN      (1 << 10)  /* Bit 10: LPTIM3 clock enable */
 #define RCC_APB4ENR_LPTIM4EN      (1 << 11)  /* Bit 11: LPTIM4 clock enable */
 #define RCC_APB4ENR_LPTIM5EN      (1 << 12)  /* Bit 12: LPTIM5 clock enable */
-
-/* APB5 Peripheral Clock Enable Register (RCC_APB5ENR) */
-
-#define RCC_APB5ENR_RTCEN         (1 << 0)   /* Bit 0:  RTC clock enable */
+#define RCC_APB4ENR1_RTCAPBEN     (1 << 17)  /* Bit 17: RTC APB interface clock enable */
 
 /* Embedded Memories Enable Register (RCC_MEMENR) */
 
@@ -735,5 +739,28 @@
 
 #define RCC_CCIPR1_ADCPRE_SHIFT       (8)
 #define RCC_CCIPR1_ADCPRE_MASK        (0xff << RCC_CCIPR1_ADCPRE_SHIFT)
+
+/* RCC_CCIPR7 - RTC kernel clock source selection
+ *
+ * RTCSEL field is bits [9:8]:
+ *   00 = No clock
+ *   01 = LSE
+ *   10 = LSI
+ *   11 = HSE/64
+ */
+
+#define RCC_CCIPR7_RTCSEL_SHIFT       (8)
+#define RCC_CCIPR7_RTCSEL_MASK        (3 << RCC_CCIPR7_RTCSEL_SHIFT)
+#  define RCC_CCIPR7_RTCSEL_NONE      (0 << RCC_CCIPR7_RTCSEL_SHIFT)
+#  define RCC_CCIPR7_RTCSEL_LSE       (1 << RCC_CCIPR7_RTCSEL_SHIFT)
+#  define RCC_CCIPR7_RTCSEL_LSI       (2 << RCC_CCIPR7_RTCSEL_SHIFT)
+#  define RCC_CCIPR7_RTCSEL_HSE       (3 << RCC_CCIPR7_RTCSEL_SHIFT)
+
+/* RCC_BDCR - Backup Domain Control Register
+ *
+ * Bit 31: VSWRST - Voltage switch reset (backup domain reset)
+ */
+
+#define RCC_BDCR_VSWRST               (1 << 31) /* Bit 31: Backup domain reset */
 
 #endif /* __ARCH_ARM_SRC_STM32N6_HARDWARE_STM32N6XXX_RCC_H */

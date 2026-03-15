@@ -294,6 +294,45 @@ config STM32N6_USB2_OTG_HS
 	default n
 	select USBHOST_HAVE_ASYNCH if USBHOST
 
+config STM32N6_RTC
+	bool "RTC"
+	default n
+	select RTC
+	select RTC_DATETIME
+
+endmenu
+
+menu "RTC Configuration"
+	depends on STM32N6_RTC
+
+choice
+	prompt "RTC clock source"
+	default STM32N6_RTC_LSECLOCK
+
+config STM32N6_RTC_LSECLOCK
+	bool "LSE (32.768 kHz)"
+	---help---
+		Use the LSE crystal as RTC clock source.
+
+config STM32N6_RTC_LSICLOCK
+	bool "LSI"
+	---help---
+		Use the LSI RC oscillator as RTC clock source.
+
+config STM32N6_RTC_HSECLOCK
+	bool "HSE/64"
+	---help---
+		Use the HSE oscillator divided by 64 as RTC clock source.
+
+endchoice
+
+config STM32N6_RTC_MAGIC_REG
+	int "RTC magic backup register index"
+	default 0
+	range 0 31
+	---help---
+		Backup register used to store the RTC initialization magic value.
+
 endmenu
 
 menu "USB OTG Configuration"

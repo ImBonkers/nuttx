@@ -41,6 +41,7 @@
 #define STM32_PWR_CR4_OFFSET       0x000c  /* Power control register 4 */
 #define STM32_PWR_VOSCR_OFFSET     0x0010  /* Voltage scaling control register */
 #define STM32_PWR_VOSSR_OFFSET     0x0014  /* Voltage scaling status register */
+#define STM32_PWR_DBPCR_OFFSET     0x002c  /* Debug backup domain protection control register */
 #define STM32_PWR_SVMCR1_OFFSET    0x0034  /* Supply voltage monitoring control register 1 */
 #define STM32_PWR_SVMCR2_OFFSET    0x0038  /* Supply voltage monitoring control register 2 */
 #define STM32_PWR_SVMCR3_OFFSET    0x003c  /* Supply voltage monitoring control register 3 */
@@ -53,11 +54,16 @@
 #define STM32_PWR_CR4          (STM32_PWR_BASE + STM32_PWR_CR4_OFFSET)
 #define STM32_PWR_VOSCR        (STM32_PWR_BASE + STM32_PWR_VOSCR_OFFSET)
 #define STM32_PWR_VOSSR        (STM32_PWR_BASE + STM32_PWR_VOSSR_OFFSET)
+#define STM32_PWR_DBPCR        (STM32_PWR_BASE + STM32_PWR_DBPCR_OFFSET)
 #define STM32_PWR_SVMCR1       (STM32_PWR_BASE + STM32_PWR_SVMCR1_OFFSET)
 #define STM32_PWR_SVMCR2       (STM32_PWR_BASE + STM32_PWR_SVMCR2_OFFSET)
 #define STM32_PWR_SVMCR3       (STM32_PWR_BASE + STM32_PWR_SVMCR3_OFFSET)
 
 /* Register Bitfield Definitions ********************************************/
+
+/* Debug Backup Domain Protection Control Register (PWR_DBPCR) */
+
+#define PWR_DBPCR_DBP              (1 << 0)  /* Bit 0: Disable backup domain write protection */
 
 /* Voltage Scaling Control Register (PWR_VOSCR) */
 
