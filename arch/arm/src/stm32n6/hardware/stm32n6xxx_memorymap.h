@@ -117,10 +117,10 @@
 #define STM32_GPIOF_BASE      0x56021400
 #define STM32_GPIOG_BASE      0x56021800
 #define STM32_GPIOH_BASE      0x56021c00
-#define STM32_GPION_BASE      0x56022000
-#define STM32_GPIOO_BASE      0x56022400
-#define STM32_GPIOP_BASE      0x56022800
-#define STM32_GPIOQ_BASE      0x56022c00
+#define STM32_GPION_BASE      0x56023400
+#define STM32_GPIOO_BASE      0x56023800
+#define STM32_GPIOP_BASE      0x56023c00
+#define STM32_GPIOQ_BASE      0x56024000
 
 #define STM32_PWR_BASE        0x56024800
 #define STM32_RCC_BASE        0x56028000
@@ -141,6 +141,8 @@
 
 #define STM32_AHB5_BASE       0x58020000    /* AHB5 (Secure) */
 #define STM32_HPDMA1_BASE     0x58020000    /* HPDMA1 (AHB5, Secure) */
+#define STM32_XSPI2_BASE     0x5802A000    /* XSPI2 controller (AHB5, Secure) */
+#define STM32_XSPIM_BASE     0x5802B400    /* XSPIM IO Manager (AHB5, Secure) */
 #define STM32_USB1_HS_PHYC_BASE 0x5803FC00  /* USB1 HS PHY controller (Secure) */
 #define STM32_USB1_OTG_HS_BASE  0x58040000  /* USB1 OTG HS (Secure) */
 #define STM32_USB2_OTG_HS_BASE  0x58080000  /* USB2 OTG HS (Secure) */

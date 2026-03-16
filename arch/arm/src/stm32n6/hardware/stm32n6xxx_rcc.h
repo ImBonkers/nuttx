@@ -189,6 +189,7 @@
 /* Sleep (LPEN) enable SET registers */
 
 #define STM32_RCC_AHB3LPENSR_OFFSET    0x0a98  /* AHB3 sleep enable SET register */
+#define STM32_RCC_AHB5LPENSR_OFFSET    0x0aa0  /* AHB5 sleep enable SET register */
 
 /* RCC internal RIF security registers (per-bus access control) */
 
@@ -315,6 +316,7 @@
 /* Sleep (LPEN) enable SET register addresses */
 
 #define STM32_RCC_AHB3LPENSR  (STM32_RCC_BASE + STM32_RCC_AHB3LPENSR_OFFSET)
+#define STM32_RCC_AHB5LPENSR  (STM32_RCC_BASE + STM32_RCC_AHB5LPENSR_OFFSET)
 
 /* AHB3 Sleep Enable Register (RCC_AHB3LPENR) */
 
@@ -516,6 +518,9 @@
 /* AHB5 Peripheral Clock Enable Register (RCC_AHB5ENR) */
 
 #define RCC_AHB5ENR_HPDMA1EN      (1 << 0)   /* Bit 0:  HPDMA1 clock enable */
+#define RCC_AHB5ENR_XSPI1EN       (1 << 5)   /* Bit 5:  XSPI1 clock enable */
+#define RCC_AHB5ENR_XSPI2EN       (1 << 12)  /* Bit 12: XSPI2 clock enable */
+#define RCC_AHB5ENR_XSPIMEN       (1 << 13)  /* Bit 13: XSPIM clock enable */
 #define RCC_AHB5ENR_OTG1EN        (1 << 26)  /* Bit 26: USB1 OTG controller clock enable */
 #define RCC_AHB5ENR_OTGPHY1EN     (1 << 27)  /* Bit 27: USB1 PHY clock enable */
 #define RCC_AHB5ENR_OTGPHY2EN     (1 << 28)  /* Bit 28: USB2 PHY clock enable */
@@ -528,6 +533,8 @@
 
 /* AHB5 Peripheral Reset Register (RCC_AHB5RSTR / RSTSR / RSTCR) */
 
+#define RCC_AHB5RSTR_XSPI2RST        (1 << 12)  /* Bit 12: XSPI2 reset */
+#define RCC_AHB5RSTR_XSPIMRST        (1 << 13)  /* Bit 13: XSPIM reset */
 #define RCC_AHB5RSTR_OTG1PHYCTLRST   (1 << 23)  /* Bit 23: OTG1 PHY controller reset */
 #define RCC_AHB5RSTR_OTG2PHYCTLRST   (1 << 24)  /* Bit 24: OTG2 PHY controller reset */
 #define RCC_AHB5RSTR_OTG1RST         (1 << 26)  /* Bit 26: USB1 OTG controller reset */
@@ -706,6 +713,18 @@
 #  define RCC_CCIPR9_SPI6SEL_IC9      (3 << RCC_CCIPR9_SPI6SEL_SHIFT)
 #  define RCC_CCIPR9_SPI6SEL_MSI      (4 << RCC_CCIPR9_SPI6SEL_SHIFT)
 #  define RCC_CCIPR9_SPI6SEL_HSI      (5 << RCC_CCIPR9_SPI6SEL_SHIFT)
+
+/* RCC_CCIPR6 - XSPI + USB PHY clock source selection
+ *
+ * XSPI2SEL [5:4]: 00=HCLK, 01=PLL1(IC3), 10=PLL2(IC4), 11=CLKP
+ */
+
+#define RCC_CCIPR6_XSPI2SEL_SHIFT        (4)
+#define RCC_CCIPR6_XSPI2SEL_MASK         (3 << RCC_CCIPR6_XSPI2SEL_SHIFT)
+#  define RCC_CCIPR6_XSPI2SEL_HCLK       (0 << RCC_CCIPR6_XSPI2SEL_SHIFT)
+#  define RCC_CCIPR6_XSPI2SEL_IC3        (1 << RCC_CCIPR6_XSPI2SEL_SHIFT)
+#  define RCC_CCIPR6_XSPI2SEL_IC4        (2 << RCC_CCIPR6_XSPI2SEL_SHIFT)
+#  define RCC_CCIPR6_XSPI2SEL_CLKP       (3 << RCC_CCIPR6_XSPI2SEL_SHIFT)
 
 /* RCC_CCIPR6 - USB PHY clock source selection
  *

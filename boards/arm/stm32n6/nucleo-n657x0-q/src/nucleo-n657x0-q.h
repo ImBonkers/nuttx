@@ -111,5 +111,9 @@ int stm32_pwm_setup(void);
 int stm32_dmatest_main(int argc, char *argv[]);
 #endif
 
+#ifdef CONFIG_STM32N6_XSPI
+int stm32_xspi_setup(void);
+#endif
+
 #endif /* __ASSEMBLY__ */
 #endif /* __BOARDS_ARM_STM32N6_NUCLEO_N657X0_Q_SRC_NUCLEO_N657X0_Q_H */

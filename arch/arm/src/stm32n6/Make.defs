@@ -82,6 +82,10 @@ ifeq ($(CONFIG_STM32N6_RNG),y)
 CHIP_CSRCS += stm32_rng.c
 endif
 
+ifeq ($(CONFIG_STM32N6_XSPI),y)
+CHIP_CSRCS += stm32_xspi.c
+endif
+
 ifeq ($(CONFIG_ARM_MPU),y)
 CHIP_CSRCS += stm32_mpuinit.c
 endif

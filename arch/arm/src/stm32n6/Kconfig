@@ -310,6 +310,31 @@ config STM32N6_RNG
 	default n
 	select ARCH_HAVE_RNG
 
+config STM32N6_XSPI
+	bool
+	default n
+
+config STM32N6_XSPI2
+	bool "XSPI2 (external NOR flash)"
+	default n
+	select STM32N6_XSPI
+	---help---
+		Enable XSPI2 for external NOR flash (MX25UM51245G 64MB).
+
+config STM32N6_XSPI_INTERRUPTS
+	bool "XSPI interrupt mode"
+	default n
+	depends on STM32N6_XSPI
+	---help---
+		Use interrupt-driven transfers instead of polling.
+
+config STM32N6_XSPI_FLASH_SIZE
+	int "XSPI flash size in bytes"
+	default 67108864
+	depends on STM32N6_XSPI
+	---help---
+		Size of the external flash in bytes. Default 64MB.
+
 endmenu
 
 menu "RTC Configuration"

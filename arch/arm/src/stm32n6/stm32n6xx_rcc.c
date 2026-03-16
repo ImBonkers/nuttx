@@ -255,6 +255,7 @@ void stm32_stdclockconfig(void)
   /* 6. Configure IC dividers (source=PLL1, register value = divider - 1)
    *    IC1  = PLL1 / 2  = 600 MHz  (CPU)
    *    IC2  = PLL1 / 3  = 400 MHz  (SYSCLK)
+   *    IC3  = PLL1 / 6  = 200 MHz  (XSPI2 kernel clock)
    *    IC6  = PLL1 / 4  = 300 MHz  (AHB / NPU)
    *    IC11 = PLL1 / 3  = 400 MHz  (APB / NPU RAMS)
    */
@@ -263,14 +264,16 @@ void stm32_stdclockconfig(void)
            STM32_RCC_IC1CFGR);   /* IC1: 1200/2 = 600 MHz */
   putreg32(RCC_ICCFGR_SEL_PLL1 | (2 << RCC_ICCFGR_INT_SHIFT),
            STM32_RCC_IC2CFGR);   /* IC2: 1200/3 = 400 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (5 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC3CFGR);   /* IC3: 1200/6 = 200 MHz */
   putreg32(RCC_ICCFGR_SEL_PLL1 | (3 << RCC_ICCFGR_INT_SHIFT),
            STM32_RCC_IC6CFGR);   /* IC6: 1200/4 = 300 MHz */
   putreg32(RCC_ICCFGR_SEL_PLL1 | (2 << RCC_ICCFGR_INT_SHIFT),
            STM32_RCC_IC11CFGR);  /* IC11: 1200/3 = 400 MHz */
 
-  /* 7. Enable IC1, IC2, IC6, IC11 */
+  /* 7. Enable IC1, IC2, IC3, IC6, IC11 */
 
-  putreg32(RCC_DIVENR_IC1EN | RCC_DIVENR_IC2EN
+  putreg32(RCC_DIVENR_IC1EN | RCC_DIVENR_IC2EN | RCC_DIVENR_IC3EN
          | RCC_DIVENR_IC6EN | RCC_DIVENR_IC11EN,
            STM32_RCC_DIVENSR);
 

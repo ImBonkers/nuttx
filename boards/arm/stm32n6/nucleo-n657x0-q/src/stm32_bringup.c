@@ -55,6 +55,9 @@
 #ifdef CONFIG_STM32N6_IWDG
 #include "stm32_wdg.h"
 #endif
+#ifdef CONFIG_STM32N6_XSPI
+#include "stm32_xspi.h"
+#endif
 #include "nucleo-n657x0-q.h"
 
 #include <arch/board/board.h>
@@ -204,6 +207,16 @@ int stm32_bringup(void)
       }
   }
 
+#endif
+
+#ifdef CONFIG_STM32N6_XSPI2
+  /* Initialize XSPI2 and register external flash */
+
+  ret = stm32_xspi_setup();
+  if (ret < 0)
+    {
+      ferr("ERROR: stm32_xspi_setup failed: %d\n", ret);
+    }
 #endif
 
 #if defined(CONFIG_CDCACM) && !defined(CONFIG_CDCACM_CONSOLE)
