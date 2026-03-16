@@ -39,6 +39,34 @@
 #ifdef CONFIG_STM32N6_XSPI
 
 /****************************************************************************
+ * Pre-processor Definitions
+ ****************************************************************************/
+
+/* Flash partition layout (64MB MX25UM51245G)
+ *
+ * All sizes in 256-byte blocks (the MTD blocksize for this device).
+ * Each erase block is 4KB = 16 blocks.
+ *
+ *  Region  | Flash Addr  | Block Offset | Blocks | Size
+ *  --------|-------------|--------------|--------|------
+ *  FSBL    | 0x70000000  | 0            | 512    | 128KB
+ *  NuttX   | 0x70020000  | 512          | 4096   | 1MB
+ *  NPU     | 0x70120000  | 4608         | 65536  | 16MB
+ *  FS      | 0x71120000  | 70144        | rest   | ~47MB
+ */
+
+#define FLASH_FSBL_FIRSTBLK    0
+#define FLASH_FSBL_NBLOCKS     512       /* 128KB / 256 */
+
+#define FLASH_NUTTX_FIRSTBLK   512
+#define FLASH_NUTTX_NBLOCKS    4096      /* 1MB / 256 */
+
+#define FLASH_NPU_FIRSTBLK     4608
+#define FLASH_NPU_NBLOCKS      65536     /* 16MB / 256 */
+
+#define FLASH_FS_FIRSTBLK      70144
+
+/****************************************************************************
  * Public Functions
  ****************************************************************************/
 
@@ -46,8 +74,13 @@
  * Name: stm32_xspi_setup
  *
  * Description:
- *   Initialize XSPI2 and register the MX25UM51245G as an MTD device.
- *   The flash is a 64MB Octal NOR. We use SPI 1-1-1 mode initially.
+ *   Initialize XSPI2 and register the MX25UM51245G as partitioned MTD
+ *   devices.  The 64MB flash is split into four partitions:
+ *
+ *     /dev/mtdblock0 — FSBL   (128KB, read-only boot image)
+ *     /dev/mtdblock1 — NuttX  (1MB, read-only application image)
+ *     /dev/mtdblock2 — NPU    (16MB, DNN weight storage)
+ *     /dev/mtdblock3 — FS     (~47MB, littlefs filesystem)
  *
  * Returned Value:
  *   Zero (OK) on success; a negated errno value on failure.
@@ -58,6 +91,11 @@ int stm32_xspi_setup(void)
 {
   struct qspi_dev_s *qspi;
   struct mtd_dev_s *mtd;
+#ifdef CONFIG_MTD_PARTITION
+  struct mtd_dev_s *part;
+  struct mtd_geometry_s geo;
+  off_t totalblocks;
+#endif
   int ret;
 
   /* Initialize the XSPI2 driver */
@@ -82,34 +120,70 @@ int stm32_xspi_setup(void)
   if (mtd == NULL)
     {
       fwarn("WARNING: mx25rxx_initialize failed (expected for MX25UM)\n");
-
-      /* For now, the QSPI device is still available for direct use.
-       * A custom MTD driver for MX25UM51245G can be added later.
-       */
-
       return OK;
     }
 
-  /* Register the MTD device as /dev/mtdblock0 */
+#ifdef CONFIG_MTD_PARTITION
+  /* Query flash geometry to compute filesystem partition size */
 
-  ret = register_mtddriver("/dev/mtdblock0", mtd, 0755, NULL);
+  ret = MTD_IOCTL(mtd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)&geo));
   if (ret < 0)
     {
-      ferr("ERROR: register_mtddriver failed: %d\n", ret);
+      ferr("ERROR: MTD_IOCTL(GEOMETRY) failed: %d\n", ret);
       return ret;
     }
 
-  finfo("XSPI2 flash registered as /dev/mtdblock0\n");
+  totalblocks = (off_t)geo.neraseblocks * (geo.erasesize / geo.blocksize);
+  finfo("Flash: %lu erase blocks, blocksize=%lu, erasesize=%lu, "
+        "total blocks=%ld\n",
+        (unsigned long)geo.neraseblocks, (unsigned long)geo.blocksize,
+        (unsigned long)geo.erasesize, (long)totalblocks);
+
+  /* Partition 0: FSBL (128KB) — /dev/mtdblock0 */
+
+  part = mtd_partition(mtd, FLASH_FSBL_FIRSTBLK, FLASH_FSBL_NBLOCKS);
+  if (part != NULL)
+    {
+      register_mtddriver("/dev/mtdblock0", part, 0444, NULL);
+    }
+
+  /* Partition 1: NuttX (1MB) — /dev/mtdblock1 */
+
+  part = mtd_partition(mtd, FLASH_NUTTX_FIRSTBLK, FLASH_NUTTX_NBLOCKS);
+  if (part != NULL)
+    {
+      register_mtddriver("/dev/mtdblock1", part, 0444, NULL);
+    }
+
+  /* Partition 2: NPU weights (16MB) — /dev/mtdblock2 */
+
+  part = mtd_partition(mtd, FLASH_NPU_FIRSTBLK, FLASH_NPU_NBLOCKS);
+  if (part != NULL)
+    {
+      register_mtddriver("/dev/mtdblock2", part, 0444, NULL);
+    }
+
+  /* Partition 3: Filesystem (~47MB) — /dev/mtdblock3 */
+
+  part = mtd_partition(mtd, FLASH_FS_FIRSTBLK,
+                       totalblocks - FLASH_FS_FIRSTBLK);
+  if (part != NULL)
+    {
+      register_mtddriver("/dev/mtdblock3", part, 0755, NULL);
+      finfo("XSPI2 flash partitioned: fsbl=128K nuttx=1M npu=16M fs=%ldK\n",
+            (long)((totalblocks - FLASH_FS_FIRSTBLK) * geo.blocksize / 1024));
+    }
 
 #ifdef CONFIG_FS_LITTLEFS
-  /* Mount littlefs on the flash. Try normal mount first, then format. */
+  /* Mount littlefs on the filesystem partition only */
 
   mkdir("/mnt", 0777);
-  ret = nx_mount("/dev/mtdblock0", "/mnt", "littlefs", 0, NULL);
+  ret = nx_mount("/dev/mtdblock3", "/mnt", "littlefs", 0, NULL);
   if (ret < 0)
     {
       fwarn("littlefs mount failed (%d), formatting...\n", ret);
-      ret = nx_mount("/dev/mtdblock0", "/mnt", "littlefs", 0, "forceformat");
+      ret = nx_mount("/dev/mtdblock3", "/mnt", "littlefs", 0,
+                     "forceformat");
       if (ret < 0)
         {
           ferr("ERROR: littlefs format+mount failed: %d\n", ret);
@@ -123,7 +197,35 @@ int stm32_xspi_setup(void)
     {
       finfo("littlefs mounted at /mnt\n");
     }
-#endif
+#endif /* CONFIG_FS_LITTLEFS */
+
+#else /* !CONFIG_MTD_PARTITION */
+  /* No partition support — register the whole flash as a single device */
+
+  ret = register_mtddriver("/dev/mtdblock0", mtd, 0755, NULL);
+  if (ret < 0)
+    {
+      ferr("ERROR: register_mtddriver failed: %d\n", ret);
+      return ret;
+    }
+
+  finfo("XSPI2 flash registered as /dev/mtdblock0 (unpartitioned)\n");
+
+#ifdef CONFIG_FS_LITTLEFS
+  mkdir("/mnt", 0777);
+  ret = nx_mount("/dev/mtdblock0", "/mnt", "littlefs", 0, NULL);
+  if (ret < 0)
+    {
+      fwarn("littlefs mount failed (%d), formatting...\n", ret);
+      ret = nx_mount("/dev/mtdblock0", "/mnt", "littlefs", 0,
+                     "forceformat");
+      if (ret < 0)
+        {
+          ferr("ERROR: littlefs format+mount failed: %d\n", ret);
+        }
+    }
+#endif /* CONFIG_FS_LITTLEFS */
+#endif /* CONFIG_MTD_PARTITION */
 
   return OK;
 }

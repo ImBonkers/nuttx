@@ -268,6 +268,22 @@ config STM32N6_ADC2
 	select ADC
 	select ANALOG
 
+config STM32N6_ADC1_DMA
+	bool "ADC1 DMA"
+	default n
+	depends on STM32N6_ADC1 && STM32N6_DMA
+	---help---
+		Use DMA one-shot mode for ADC1 multi-channel conversion
+		sequences. Reduces CPU overhead during conversions.
+
+config STM32N6_ADC2_DMA
+	bool "ADC2 DMA"
+	default n
+	depends on STM32N6_ADC2 && STM32N6_DMA
+	---help---
+		Use DMA one-shot mode for ADC2 multi-channel conversion
+		sequences. Reduces CPU overhead during conversions.
+
 config STM32N6_DMA
 	bool
 	default n
@@ -334,6 +350,22 @@ config STM32N6_XSPI_FLASH_SIZE
 	depends on STM32N6_XSPI
 	---help---
 		Size of the external flash in bytes. Default 64MB.
+
+config STM32N6_XSPI2_DMA
+	bool "XSPI2 DMA"
+	default n
+	depends on STM32N6_XSPI2 && STM32N6_DMA && !STM32N6_XSPI_INTERRUPTS
+	---help---
+		Use DMA for XSPI2 data transfers. Mutually exclusive with
+		interrupt mode. Falls back to polling for small transfers.
+
+config STM32N6_XSPI_DMATHRESHOLD
+	int "XSPI DMA threshold"
+	default 4
+	depends on STM32N6_XSPI2_DMA
+	---help---
+		Minimum number of bytes for DMA transfer. Transfers smaller
+		than this use polling instead.
 
 endmenu
 
@@ -414,6 +446,17 @@ config STM32N6_USBDEV_REGDEBUG
 	bool "USB device register debug"
 	depends on USBDEV && DEBUG_USB_INFO
 	default n
+
+config STM32N6_OTG_DMA
+	bool "USB OTG internal DMA (EXPERIMENTAL)"
+	default n
+	depends on STM32N6_USB1_OTG_HS || STM32N6_USB2_OTG_HS
+	---help---
+		Enable the DWC2 internal DMA engine (GAHBCFG.DMAEN).
+		Replaces CPU FIFO read/write with hardware scatter-gather
+		DMA to/from endpoint buffers. This does NOT use GPDMA or
+		HPDMA channels. EXPERIMENTAL: no other NuttX STM32 port
+		uses DWC2 internal DMA. Default OFF.
 
 endmenu
 

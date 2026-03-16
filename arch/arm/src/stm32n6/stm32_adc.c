@@ -44,6 +44,11 @@
 #include "hardware/stm32n6xxx_adc.h"
 #include "hardware/stm32n6xxx_rcc.h"
 
+#if defined(CONFIG_STM32N6_ADC1_DMA) || defined(CONFIG_STM32N6_ADC2_DMA)
+#  include <nuttx/cache.h>
+#  include "stm32_dma.h"
+#endif
+
 #ifdef CONFIG_STM32N6_ADC
 
 /****************************************************************************
@@ -64,6 +69,12 @@
 
 #define PWR_SVMCR3_ASV         (1 << 12)
 
+/* ADC DMA convenience macro */
+
+#if defined(CONFIG_STM32N6_ADC1_DMA) || defined(CONFIG_STM32N6_ADC2_DMA)
+#  define ADC_HAVE_DMA
+#endif
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -76,6 +87,13 @@ struct stm32_adc_dev_s
   uint8_t  nchannels;
   uint8_t  current;
   uint8_t  chanlist[STM32_ADC_MAX_SAMPLES];
+
+#ifdef ADC_HAVE_DMA
+  bool     hasdma;
+  uint8_t  dmareq;
+  DMA_HANDLE dma;
+  uint32_t dmabuf[STM32_ADC_MAX_SAMPLES] aligned_data(32);
+#endif
 };
 
 /****************************************************************************
@@ -118,6 +136,10 @@ static struct stm32_adc_dev_s g_adcpriv1 =
 {
   .base  = STM32_ADC1_BASE,
   .intf  = 1,
+#ifdef CONFIG_STM32N6_ADC1_DMA
+  .hasdma = true,
+  .dmareq = GPDMA_REQ_ADC1,
+#endif
 };
 
 static struct adc_dev_s g_adcdev1 =
@@ -132,6 +154,10 @@ static struct stm32_adc_dev_s g_adcpriv2 =
 {
   .base  = STM32_ADC2_BASE,
   .intf  = 2,
+#ifdef CONFIG_STM32N6_ADC2_DMA
+  .hasdma = true,
+  .dmareq = GPDMA_REQ_ADC2,
+#endif
 };
 
 static struct adc_dev_s g_adcdev2 =
@@ -266,10 +292,20 @@ static void adc_configure(struct stm32_adc_dev_s *priv)
   adc_putreg(priv, STM32_ADC_SQR3_OFFSET, 0);
   adc_putreg(priv, STM32_ADC_SQR4_OFFSET, 0);
 
-  /* CFGR1: 12-bit, software trigger, overwrite on overrun */
+  /* CFGR1: 12-bit, software trigger, overwrite on overrun.
+   * When DMA is enabled, set DMNGT to DMA one-shot mode.
+   */
 
-  adc_putreg(priv, STM32_ADC_CFGR1_OFFSET,
-             ADC_CFGR1_RES_12BIT | ADC_CFGR1_OVRMOD);
+  {
+    uint32_t cfgr1 = ADC_CFGR1_RES_12BIT | ADC_CFGR1_OVRMOD;
+#ifdef ADC_HAVE_DMA
+    if (priv->hasdma && priv->dma != NULL)
+      {
+        cfgr1 |= ADC_CFGR1_DMNGT_DMA1;
+      }
+#endif
+    adc_putreg(priv, STM32_ADC_CFGR1_OFFSET, cfgr1);
+  }
   adc_putreg(priv, STM32_ADC_CFGR2_OFFSET, 0);
 
   /* CCR: independent mode, enable VREFINT */
@@ -332,6 +368,21 @@ static int adc_setup(struct adc_dev_s *dev)
   adc_putreg(priv, STM32_ADC_CR_OFFSET, 0);
   up_udelay(20);
 
+  /* Allocate DMA channel if configured */
+
+#ifdef ADC_HAVE_DMA
+  if (priv->hasdma && priv->dma == NULL)
+    {
+      priv->dma = stm32_dmachannel(GPDMA_TTYPE_P2M);
+      if (priv->dma == NULL)
+        {
+          priv->hasdma = false;
+          aerr("ADC%d: DMA channel unavailable, using polling\n",
+               priv->intf);
+        }
+    }
+#endif
+
   /* Configure channels (must be done with ADEN=0) */
 
   adc_configure(priv);
@@ -367,6 +418,14 @@ static void adc_shutdown(struct adc_dev_s *dev)
   adc_putreg(priv, STM32_ADC_IER_OFFSET, 0);
   adc_disable(priv);
   adc_putreg(priv, STM32_ADC_CR_OFFSET, ADC_CR_DEEPPWD);
+
+#ifdef ADC_HAVE_DMA
+  if (priv->dma != NULL)
+    {
+      stm32_dmafree(priv->dma);
+      priv->dma = NULL;
+    }
+#endif
 }
 
 /****************************************************************************
@@ -407,38 +466,126 @@ static int adc_ioctl(struct adc_dev_s *dev, int cmd, unsigned long arg)
       case ANIOC_TRIGGER:
         {
           int i;
-          int timeout;
 
           /* Disable IER to prevent ISR from stealing DR reads */
 
           adc_putreg(priv, STM32_ADC_IER_OFFSET, 0);
           adc_putreg(priv, STM32_ADC_ISR_OFFSET, ADC_ISR_ALLINTS);
 
-          /* Start conversion */
-
-          priv->current = 0;
-          adc_putreg(priv, STM32_ADC_CR_OFFSET,
-                     ADC_CR_ADEN | ADC_CR_ADSTART);
-
-          /* Poll each channel */
-
-          for (i = 0; i < priv->nchannels; i++)
+#ifdef ADC_HAVE_DMA
+          if (priv->hasdma && priv->dma != NULL && priv->nchannels > 0)
             {
-              for (timeout = 0; timeout < ADC_TIMEOUT; timeout++)
+              struct stm32_gpdma_cfg_s dmacfg;
+              size_t nbytes = priv->nchannels * sizeof(uint32_t);
+              size_t nbytes_aligned = (nbytes + 31) & ~31u;
+              int ret;
+
+              /* Pre-invalidate DMA buffer */
+
+              up_invalidate_dcache(
+                (uintptr_t)priv->dmabuf,
+                (uintptr_t)priv->dmabuf + nbytes_aligned);
+
+              /* Build DMA config: ADC DR → dmabuf (P2M, word width) */
+
+              memset(&dmacfg, 0, sizeof(dmacfg));
+              dmacfg.src_addr   = priv->base + STM32_ADC_DR_OFFSET;
+              dmacfg.dest_addr  = (uint32_t)(uintptr_t)priv->dmabuf;
+              dmacfg.tr1        = GPDMA_CXTR1_SDW_LOG2_WORD |
+                                  GPDMA_CXTR1_DDW_LOG2_WORD |
+                                  GPDMA_CXTR1_DINC;
+              dmacfg.request    = GPDMA_CXTR2_REQSEL(priv->dmareq);
+              dmacfg.ntransfers = nbytes;
+
+              /* Clear any pending DMA requests by toggling DMNGT off
+               * then on.  The ADC may have a stale EOC from a prior
+               * polling conversion that would cause an immediate
+               * spurious DMA transfer.  ADSTP first if running.
+               */
+
+              {
+                uint32_t cr = adc_getreg(priv, STM32_ADC_CR_OFFSET);
+                if (cr & ADC_CR_ADSTART)
+                  {
+                    adc_putreg(priv, STM32_ADC_CR_OFFSET,
+                               ADC_CR_ADEN | ADC_CR_ADSTP);
+                    while (adc_getreg(priv, STM32_ADC_CR_OFFSET) &
+                           ADC_CR_ADSTP);
+                  }
+              }
+
+              adc_putreg(priv, STM32_ADC_ISR_OFFSET, ADC_ISR_ALLINTS);
+
+              stm32_dmasetup(priv->dma, &dmacfg);
+              stm32_dmastart(priv->dma, NULL, NULL, false);
+
+              /* Start conversion sequence */
+
+              priv->current = 0;
+              adc_putreg(priv, STM32_ADC_CR_OFFSET,
+                         ADC_CR_ADEN | ADC_CR_ADSTART);
+
+              /* Poll for DMA completion (generous timeout) */
+
+              ret = stm32_dmapollwait(priv->dma, 50000);
+              stm32_dmastop(priv->dma);
+
+              if (ret < 0)
                 {
-                  if (adc_getreg(priv, STM32_ADC_ISR_OFFSET) & ADC_ISR_EOC)
+                  aerr("ADC%d: DMA %s\n", priv->intf,
+                       ret == -ETIMEDOUT ? "timeout" : "error");
+                }
+              else
+                {
+                  /* Invalidate and deliver results */
+
+                  up_invalidate_dcache(
+                    (uintptr_t)priv->dmabuf,
+                    (uintptr_t)priv->dmabuf + nbytes_aligned);
+
+                  for (i = 0; i < priv->nchannels; i++)
                     {
-                      break;
+                      if (priv->cb != NULL)
+                        {
+                          priv->cb->au_receive(dev,
+                                               priv->chanlist[i],
+                                               (int32_t)priv->dmabuf[i]);
+                        }
                     }
                 }
+            }
+          else
+#endif
+            {
+              int timeout;
 
-              uint32_t dr = adc_getreg(priv, STM32_ADC_DR_OFFSET);
+              /* Start conversion */
 
-              if (priv->cb != NULL)
+              priv->current = 0;
+              adc_putreg(priv, STM32_ADC_CR_OFFSET,
+                         ADC_CR_ADEN | ADC_CR_ADSTART);
+
+              /* Poll each channel */
+
+              for (i = 0; i < priv->nchannels; i++)
                 {
-                  priv->cb->au_receive(dev,
-                                       priv->chanlist[i],
-                                       (int32_t)dr);
+                  for (timeout = 0; timeout < ADC_TIMEOUT; timeout++)
+                    {
+                      if (adc_getreg(priv, STM32_ADC_ISR_OFFSET) &
+                          ADC_ISR_EOC)
+                        {
+                          break;
+                        }
+                    }
+
+                  uint32_t dr = adc_getreg(priv, STM32_ADC_DR_OFFSET);
+
+                  if (priv->cb != NULL)
+                    {
+                      priv->cb->au_receive(dev,
+                                           priv->chanlist[i],
+                                           (int32_t)dr);
+                    }
                 }
             }
 

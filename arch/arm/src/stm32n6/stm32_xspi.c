@@ -55,6 +55,11 @@
 #include "stm32_rcc.h"
 #include "hardware/stm32n6xxx_xspi.h"
 
+#ifdef CONFIG_STM32N6_XSPI2_DMA
+#  include <nuttx/cache.h>
+#  include "stm32_dma.h"
+#endif
+
 #ifdef CONFIG_STM32N6_XSPI
 
 /****************************************************************************
@@ -91,6 +96,14 @@
 
 #define XSPI_CLK_FREQUENCY  STM32_XSPI_FREQUENCY
 
+#ifdef CONFIG_STM32N6_XSPI2_DMA
+#  ifndef CONFIG_STM32N6_XSPI_DMATHRESHOLD
+#    define CONFIG_STM32N6_XSPI_DMATHRESHOLD 4
+#  endif
+#  define XSPI_DMA_THRESHOLD  CONFIG_STM32N6_XSPI_DMATHRESHOLD
+#  define XSPI_DMA_BUFSIZE    256
+#endif
+
 /****************************************************************************
  * Private Types
  ****************************************************************************/
@@ -113,6 +126,13 @@ struct stm32_xspidev_s
   uint8_t irq;                  /* Interrupt number */
   sem_t op_sem;                 /* Block until complete */
   struct xspi_xctnspec_s *xctn; /* Context of transaction in progress */
+#endif
+
+#ifdef CONFIG_STM32N6_XSPI2_DMA
+  DMA_HANDLE rxdma;             /* RX DMA channel handle */
+  DMA_HANDLE txdma;             /* TX DMA channel handle */
+  uint8_t rxdma_buf[XSPI_DMA_BUFSIZE] aligned_data(32);
+  uint8_t txdma_buf[XSPI_DMA_BUFSIZE] aligned_data(32);
 #endif
 };
 
@@ -799,6 +819,191 @@ static int xspi_transmit_blocking(struct stm32_xspidev_s *priv,
 }
 #endif /* !CONFIG_STM32N6_XSPI_INTERRUPTS */
 
+#ifdef CONFIG_STM32N6_XSPI2_DMA
+/****************************************************************************
+ * Name: xspi_receive_dma
+ *
+ * Description:
+ *   Receive data from XSPI via DMA (peripheral-to-memory).
+ *   Uses aligned bounce buffer and polled DMA wait.
+ *
+ ****************************************************************************/
+
+static int xspi_receive_dma(struct stm32_xspidev_s *priv,
+                             struct xspi_xctnspec_s *xctn)
+{
+  struct stm32_gpdma_cfg_s rxcfg;
+  uint32_t regval;
+  uint32_t addrval;
+  size_t nbytes = xctn->datasize;
+  size_t nbytes_aligned;
+  int ret;
+
+  if (xctn->buffer == NULL || nbytes == 0)
+    {
+      return -EINVAL;
+    }
+
+  nbytes_aligned = (nbytes + 31) & ~31u;
+
+  /* Pre-invalidate RX bounce buffer */
+
+  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
+                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
+
+  /* Build RX DMA config: XSPI DR (peripheral) → aligned rxdma_buf */
+
+  memset(&rxcfg, 0, sizeof(rxcfg));
+  rxcfg.src_addr   = priv->base + STM32_XSPI_DR_OFFSET;
+  rxcfg.dest_addr  = (uint32_t)(uintptr_t)priv->rxdma_buf;
+  rxcfg.tr1        = GPDMA_CXTR1_SDW_LOG2_BYTE |
+                     GPDMA_CXTR1_DDW_LOG2_BYTE |
+                     GPDMA_CXTR1_DINC;
+  rxcfg.request    = GPDMA_CXTR2_REQSEL(GPDMA_REQ_XSPI2);
+  rxcfg.ntransfers = nbytes;
+
+  /* Setup and start DMA before triggering XSPI */
+
+  stm32_dmasetup(priv->rxdma, &rxcfg);
+  stm32_dmastart(priv->rxdma, NULL, NULL, false);
+
+  /* Set DMAEN in CR, then configure XSPI for indirect read */
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval |= XSPI_CR_DMAEN;
+  regval &= ~XSPI_CR_FMODE_MASK;
+  regval |= XSPI_CR_FMODE(XSPI_FMODE_INDRD);
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  /* Re-write the address to start the transfer */
+
+  if (xctn->addrmode != CCR_ADMODE_NONE)
+    {
+      addrval = xspi_getreg(priv, STM32_XSPI_AR_OFFSET);
+      xspi_putreg(priv, addrval, STM32_XSPI_AR_OFFSET);
+    }
+  else
+    {
+      xspi_putreg(priv, xctn->instr, STM32_XSPI_IR_OFFSET);
+    }
+
+  /* Poll for DMA completion */
+
+  ret = stm32_dmapollwait(priv->rxdma, 50000);
+
+  /* Stop DMA and clear DMAEN */
+
+  stm32_dmastop(priv->rxdma);
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~XSPI_CR_DMAEN;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  if (ret < 0)
+    {
+      spierr("XSPI DMA RX %s\n",
+             ret == -ETIMEDOUT ? "timeout" : "error");
+      xspi_abort(priv);
+      return ret;
+    }
+
+  /* Wait for XSPI transfer complete */
+
+  xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+  xspi_putreg(priv, XSPI_FCR_CTCF, STM32_XSPI_FCR_OFFSET);
+  xspi_abort(priv);
+
+  /* Invalidate and copy from aligned bounce buffer */
+
+  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
+                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
+  memcpy(xctn->buffer, priv->rxdma_buf, nbytes);
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: xspi_transmit_dma
+ *
+ * Description:
+ *   Transmit data to XSPI via DMA (memory-to-peripheral).
+ *   Uses aligned bounce buffer and polled DMA wait.
+ *
+ ****************************************************************************/
+
+static int xspi_transmit_dma(struct stm32_xspidev_s *priv,
+                              struct xspi_xctnspec_s *xctn)
+{
+  struct stm32_gpdma_cfg_s txcfg;
+  uint32_t regval;
+  size_t nbytes = xctn->datasize;
+  size_t nbytes_aligned;
+  int ret;
+
+  if (xctn->buffer == NULL || nbytes == 0)
+    {
+      return -EINVAL;
+    }
+
+  nbytes_aligned = (nbytes + 31) & ~31u;
+
+  /* Copy TX data to aligned bounce buffer and clean cache */
+
+  memcpy(priv->txdma_buf, xctn->buffer, nbytes);
+  up_clean_dcache((uintptr_t)priv->txdma_buf,
+                  (uintptr_t)priv->txdma_buf + nbytes_aligned);
+
+  /* Build TX DMA config: aligned txdma_buf → XSPI DR (peripheral) */
+
+  memset(&txcfg, 0, sizeof(txcfg));
+  txcfg.src_addr   = (uint32_t)(uintptr_t)priv->txdma_buf;
+  txcfg.dest_addr  = priv->base + STM32_XSPI_DR_OFFSET;
+  txcfg.tr1        = GPDMA_CXTR1_SDW_LOG2_BYTE |
+                     GPDMA_CXTR1_DDW_LOG2_BYTE |
+                     GPDMA_CXTR1_SINC;
+  txcfg.request    = GPDMA_CXTR2_REQSEL(GPDMA_REQ_XSPI2) |
+                     GPDMA_CXTR2_DREQ;
+  txcfg.ntransfers = nbytes;
+
+  /* Setup and start DMA before enabling XSPI DMAEN */
+
+  stm32_dmasetup(priv->txdma, &txcfg);
+  stm32_dmastart(priv->txdma, NULL, NULL, false);
+
+  /* Set DMAEN in CR (XSPI is already in indirect write mode) */
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval |= XSPI_CR_DMAEN;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  /* Poll for DMA completion */
+
+  ret = stm32_dmapollwait(priv->txdma, 50000);
+
+  /* Stop DMA and clear DMAEN */
+
+  stm32_dmastop(priv->txdma);
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~XSPI_CR_DMAEN;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  if (ret < 0)
+    {
+      spierr("XSPI DMA TX %s\n",
+             ret == -ETIMEDOUT ? "timeout" : "error");
+      xspi_abort(priv);
+      return ret;
+    }
+
+  /* Wait for XSPI transfer complete */
+
+  xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+  xspi_putreg(priv, XSPI_FCR_CTCF, STM32_XSPI_FCR_OFFSET);
+  xspi_abort(priv);
+
+  return OK;
+}
+#endif /* CONFIG_STM32N6_XSPI2_DMA */
+
 /****************************************************************************
  * Name: xspi_lock
  ****************************************************************************/
@@ -1003,32 +1208,59 @@ static int xspi_command(struct qspi_dev_s *dev,
   ret = xctn.disposition;
 
 #else
-  /* Polling mode */
-
-  xspi_ccrconfig(priv, &xctn, XSPI_FMODE_INDWR);
+  /* Polling / DMA mode */
 
   if (QSPICMD_ISDATA(cmdinfo->flags))
     {
       DEBUGASSERT(cmdinfo->buffer != NULL && cmdinfo->buflen > 0);
 
-      if (QSPICMD_ISWRITE(cmdinfo->flags))
+#ifdef CONFIG_STM32N6_XSPI2_DMA
+      if (priv->rxdma != NULL && priv->txdma != NULL &&
+          cmdinfo->buflen >= XSPI_DMA_THRESHOLD &&
+          cmdinfo->buflen <= XSPI_DMA_BUFSIZE)
         {
-          ret = xspi_transmit_blocking(priv, &xctn);
+          xspi_ccrconfig(priv, &xctn,
+                         QSPICMD_ISWRITE(cmdinfo->flags) ?
+                         XSPI_FMODE_INDWR : XSPI_FMODE_INDRD);
+
+          if (QSPICMD_ISWRITE(cmdinfo->flags))
+            {
+              ret = xspi_transmit_dma(priv, &xctn);
+            }
+          else
+            {
+              ret = xspi_receive_dma(priv, &xctn);
+            }
         }
       else
+#endif
         {
-          ret = xspi_receive_blocking(priv, &xctn);
+          xspi_ccrconfig(priv, &xctn, XSPI_FMODE_INDWR);
+
+          if (QSPICMD_ISWRITE(cmdinfo->flags))
+            {
+              ret = xspi_transmit_blocking(priv, &xctn);
+            }
+          else
+            {
+              ret = xspi_receive_blocking(priv, &xctn);
+            }
+
+          xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+          xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
         }
 
       UP_MB();
     }
   else
     {
+      xspi_ccrconfig(priv, &xctn, XSPI_FMODE_INDWR);
+
+      xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+      xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
       ret = OK;
     }
-
-  xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
-  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
 
 #endif
 
@@ -1102,25 +1334,47 @@ static int xspi_memory(struct qspi_dev_s *dev,
   ret = xctn.disposition;
 
 #else
-  /* Polling mode */
-
-  xspi_ccrconfig(priv, &xctn,
-                 QSPIMEM_ISWRITE(meminfo->flags) ? XSPI_FMODE_INDWR :
-                                                   XSPI_FMODE_INDRD);
+  /* Polling / DMA mode */
 
   DEBUGASSERT(meminfo->buffer != NULL && meminfo->buflen > 0);
 
-  if (QSPIMEM_ISWRITE(meminfo->flags))
+#ifdef CONFIG_STM32N6_XSPI2_DMA
+  if (priv->rxdma != NULL && priv->txdma != NULL &&
+      meminfo->buflen >= XSPI_DMA_THRESHOLD &&
+      meminfo->buflen <= XSPI_DMA_BUFSIZE)
     {
-      ret = xspi_transmit_blocking(priv, &xctn);
+      xspi_ccrconfig(priv, &xctn,
+                     QSPIMEM_ISWRITE(meminfo->flags) ?
+                     XSPI_FMODE_INDWR : XSPI_FMODE_INDRD);
+
+      if (QSPIMEM_ISWRITE(meminfo->flags))
+        {
+          ret = xspi_transmit_dma(priv, &xctn);
+        }
+      else
+        {
+          ret = xspi_receive_dma(priv, &xctn);
+        }
     }
   else
+#endif
     {
-      ret = xspi_receive_blocking(priv, &xctn);
-    }
+      xspi_ccrconfig(priv, &xctn,
+                     QSPIMEM_ISWRITE(meminfo->flags) ?
+                     XSPI_FMODE_INDWR : XSPI_FMODE_INDRD);
 
-  xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
-  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+      if (QSPIMEM_ISWRITE(meminfo->flags))
+        {
+          ret = xspi_transmit_blocking(priv, &xctn);
+        }
+      else
+        {
+          ret = xspi_receive_blocking(priv, &xctn);
+        }
+
+      xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+      xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+    }
 
   UP_MB();
 #endif
@@ -1451,6 +1705,28 @@ struct qspi_dev_s *stm32_xspi_initialize(int intf)
 
 #ifdef CONFIG_STM32N6_XSPI_INTERRUPTS
       up_enable_irq(priv->irq);
+#endif
+
+#ifdef CONFIG_STM32N6_XSPI2_DMA
+      priv->rxdma = stm32_dmachannel(GPDMA_TTYPE_P2M);
+      priv->txdma = stm32_dmachannel(GPDMA_TTYPE_M2P);
+
+      if (priv->rxdma == NULL || priv->txdma == NULL)
+        {
+          if (priv->rxdma != NULL)
+            {
+              stm32_dmafree(priv->rxdma);
+            }
+
+          if (priv->txdma != NULL)
+            {
+              stm32_dmafree(priv->txdma);
+            }
+
+          priv->rxdma = NULL;
+          priv->txdma = NULL;
+          spiwarn("XSPI DMA channels unavailable, using polling\n");
+        }
 #endif
     }
 

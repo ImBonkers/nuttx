@@ -116,6 +116,8 @@
 
 #define STM32_OTG_DIEPTSIZ_OFFSET(n)  (0x910 + ((n) << 5))
 
+#define STM32_OTG_DIEPDMA_OFFSET(n)   (0x0914 + ((n) << 5))
+
 #define STM32_OTG_DTXFSTS_OFFSET(n)   (0x0918 + ((n) << 5))
 
 #define STM32_OTG_DOEP_OFFSET(n)      (0x0b00 + ((n) << 5))
@@ -127,6 +129,8 @@
 #define STM32_OTG_DOEPINT_OFFSET(n)   (0x0b08 + ((n) << 5))
 
 #define STM32_OTG_DOEPTSIZ_OFFSET(n)  (0x0b10 + ((n) << 5))
+
+#define STM32_OTG_DOEPDMA_OFFSET(n)   (0x0b14 + ((n) << 5))
 
 /* Power and clock gating registers */
 
@@ -199,6 +203,8 @@
 
 #define STM32_OTG_DIEPTSIZ(n)         (STM32_OTG_BASE+STM32_OTG_DIEPTSIZ_OFFSET(n))
 
+#define STM32_OTG_DIEPDMA(n)          (STM32_OTG_BASE+STM32_OTG_DIEPDMA_OFFSET(n))
+
 #define STM32_OTG_DTXFSTS(n)          (STM32_OTG_BASE+STM32_OTG_DTXFSTS_OFFSET(n))
 
 #define STM32_OTG_DOEP(n)             (STM32_OTG_BASE+STM32_OTG_DOEP_OFFSET(n))
@@ -208,6 +214,8 @@
 #define STM32_OTG_DOEPINT(n)          (STM32_OTG_BASE+STM32_OTG_DOEPINT_OFFSET(n))
 
 #define STM32_OTG_DOEPTSIZ(n)         (STM32_OTG_BASE+STM32_OTG_DOEPTSIZ_OFFSET(n))
+
+#define STM32_OTG_DOEPDMA(n)          (STM32_OTG_BASE+STM32_OTG_DOEPDMA_OFFSET(n))
 
 /* Power and clock gating registers */
 
