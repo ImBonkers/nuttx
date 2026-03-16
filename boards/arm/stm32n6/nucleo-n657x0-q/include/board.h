@@ -69,6 +69,10 @@
 
 #define STM32_ADC_CLK_FREQUENCY 64000000ul
 
+/* LSI oscillator frequency (nominal 32 kHz) */
+
+#define STM32_LSI_FREQUENCY 32000
+
 #define BOARD_LOOPSPERMSEC      75000
 
 /* LED definitions **********************************************************/

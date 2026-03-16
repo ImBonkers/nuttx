@@ -300,6 +300,16 @@ config STM32N6_RTC
 	select RTC
 	select RTC_DATETIME
 
+config STM32N6_IWDG
+	bool "IWDG"
+	default n
+	select WATCHDOG
+
+config STM32N6_RNG
+	bool "RNG"
+	default n
+	select ARCH_HAVE_RNG
+
 endmenu
 
 menu "RTC Configuration"

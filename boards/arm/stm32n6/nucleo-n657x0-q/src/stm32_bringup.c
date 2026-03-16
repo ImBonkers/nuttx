@@ -52,6 +52,9 @@
 #ifdef CONFIG_STM32N6_PWM
 #include "stm32_pwm.h"
 #endif
+#ifdef CONFIG_STM32N6_IWDG
+#include "stm32_wdg.h"
+#endif
 #include "nucleo-n657x0-q.h"
 
 #include <arch/board/board.h>
@@ -135,6 +138,10 @@ int stm32_bringup(void)
     {
       ferr("ERROR: stm32_pwm_setup failed: %d\n", ret);
     }
+#endif
+
+#ifdef CONFIG_STM32N6_IWDG
+  stm32_iwdginitialize("/dev/watchdog0", STM32_LSI_FREQUENCY);
 #endif
 
 #ifdef CONFIG_STM32N6_SPI5

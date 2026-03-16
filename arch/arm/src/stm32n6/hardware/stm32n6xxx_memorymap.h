@@ -105,6 +105,7 @@
 /* APB4 peripherals (RTC on APB4 + 0x4000) **********************************/
 
 #define STM32_RTC_BASE        0x56004000
+#define STM32_IWDG_BASE       0x56004800
 
 /* AHB4 peripherals *********************************************************/
 
@@ -133,6 +134,7 @@
 
 /* AHB3 peripherals *********************************************************/
 
+#define STM32_RNG_BASE        0x54020000    /* RNG (AHB3, Secure) */
 #define STM32_RIFSC_BASE      0x54024000    /* RIFSC (AHB3, Secure) */
 
 /* AHB5 peripherals *********************************************************/

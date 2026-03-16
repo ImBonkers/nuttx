@@ -118,6 +118,26 @@ void stm32_clockenable(void);
 
 void stm32_rcc_enableperipherals(void);
 
+/****************************************************************************
+ * Name: stm32_rcc_enablelsi
+ *
+ * Description:
+ *   Enable the Internal Low-Speed (LSI) RC Oscillator.
+ *
+ ****************************************************************************/
+
+void stm32_rcc_enablelsi(void);
+
+/****************************************************************************
+ * Name: stm32_rcc_disablelsi
+ *
+ * Description:
+ *   Disable the Internal Low-Speed (LSI) RC Oscillator.
+ *
+ ****************************************************************************/
+
+void stm32_rcc_disablelsi(void);
+
 #undef EXTERN
 #if defined(__cplusplus)
 }

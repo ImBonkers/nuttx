@@ -186,6 +186,10 @@
 
 #define STM32_RCC_BDCR_OFFSET          0x002c  /* Backup domain control register */
 
+/* Sleep (LPEN) enable SET registers */
+
+#define STM32_RCC_AHB3LPENSR_OFFSET    0x0a98  /* AHB3 sleep enable SET register */
+
 /* RCC internal RIF security registers (per-bus access control) */
 
 #define STM32_RCC_SECCFGR0_OFFSET      0x0780  /* Security config 0 (oscillators) */
@@ -307,6 +311,14 @@
 #define STM32_RCC_CCIPR7       (STM32_RCC_BASE + STM32_RCC_CCIPR7_OFFSET)
 #define STM32_RCC_CCIPR9       (STM32_RCC_BASE + STM32_RCC_CCIPR9_OFFSET)
 #define STM32_RCC_BDCR         (STM32_RCC_BASE + STM32_RCC_BDCR_OFFSET)
+
+/* Sleep (LPEN) enable SET register addresses */
+
+#define STM32_RCC_AHB3LPENSR  (STM32_RCC_BASE + STM32_RCC_AHB3LPENSR_OFFSET)
+
+/* AHB3 Sleep Enable Register (RCC_AHB3LPENR) */
+
+#define RCC_AHB3LPENR_RNGLPEN    (1 << 0)   /* Bit 0:  RNG sleep clock enable */
 
 /* RCC internal RIF security register addresses */
 
@@ -491,6 +503,7 @@
 
 /* AHB3 Peripheral Clock Enable Register (RCC_AHB3ENR) */
 
+#define RCC_AHB3ENR_RNGEN         (1 << 0)   /* Bit 0:  RNG clock enable */
 #define RCC_AHB3ENR_RIFSCEN       (1 << 9)   /* Bit 9:  RIFSC clock enable */
 
 /* Embedded Buses Enable Register (RCC_BUSENR) */
