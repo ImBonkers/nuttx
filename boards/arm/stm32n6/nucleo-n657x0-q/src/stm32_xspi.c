@@ -32,6 +32,7 @@
 #include <debug.h>
 
 #include <nuttx/mtd/mtd.h>
+#include <nuttx/signal.h>
 #include <nuttx/spi/qspi.h>
 
 #include "stm32_xspi.h"
@@ -41,6 +42,20 @@
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
+
+/* MX25UM51245G status register bits */
+
+#define MX25_SR_WIP           (1 << 0)
+#define MX25_SR_WEL           (1 << 1)
+#define MX25_SR_BP_MASK       (0x3c)  /* BP3:BP0 bits 5:2 */
+#define MX25_SR_SRWD          (1 << 7)
+#define MX25_SR_PROT_MASK     (MX25_SR_BP_MASK | MX25_SR_SRWD)
+
+/* Standard SPI flash commands */
+
+#define MX25_CMD_RDSR         0x05
+#define MX25_CMD_WREN         0x06
+#define MX25_CMD_WRSR         0x01
 
 /* Flash partition layout (64MB MX25UM51245G)
  *
@@ -65,6 +80,76 @@
 #define FLASH_NPU_NBLOCKS      65536     /* 16MB / 256 */
 
 #define FLASH_FS_FIRSTBLK      70144
+
+/****************************************************************************
+ * Private Functions
+ ****************************************************************************/
+
+/****************************************************************************
+ * Name: mx25_flash_unprotect
+ *
+ * Description:
+ *   Clear block protection bits in the MX25UM51245G status register.
+ *   CubeProgrammer or FSBL may set BP bits, causing erase/write operations
+ *   to be silently rejected.  The core mx25rxx driver does not clear BP
+ *   bits for OPI-class flash.
+ *
+ ****************************************************************************/
+
+static void mx25_flash_unprotect(struct qspi_dev_s *qspi)
+{
+  struct qspi_cmdinfo_s cmdinfo;
+  uint8_t sr;
+
+  /* Read status register */
+
+  cmdinfo.flags   = QSPICMD_READDATA;
+  cmdinfo.addrlen = 0;
+  cmdinfo.cmd     = MX25_CMD_RDSR;
+  cmdinfo.buflen  = 1;
+  cmdinfo.addr    = 0;
+  cmdinfo.buffer  = &sr;
+
+  QSPI_LOCK(qspi, true);
+  QSPI_COMMAND(qspi, &cmdinfo);
+
+  if ((sr & MX25_SR_PROT_MASK) != 0)
+    {
+      /* Send WREN */
+
+      cmdinfo.flags   = 0;
+      cmdinfo.cmd     = MX25_CMD_WREN;
+      cmdinfo.buflen  = 0;
+      cmdinfo.buffer  = NULL;
+      QSPI_COMMAND(qspi, &cmdinfo);
+
+      /* Write SR = 0x00 to clear all BP bits and SRWD */
+
+      sr = 0;
+      cmdinfo.flags   = QSPICMD_WRITEDATA;
+      cmdinfo.cmd     = MX25_CMD_WRSR;
+      cmdinfo.buflen  = 1;
+      cmdinfo.buffer  = &sr;
+      QSPI_COMMAND(qspi, &cmdinfo);
+
+      /* Wait for write to complete */
+
+      do
+        {
+          nxsig_usleep(1000);
+          cmdinfo.flags   = QSPICMD_READDATA;
+          cmdinfo.cmd     = MX25_CMD_RDSR;
+          cmdinfo.buflen  = 1;
+          cmdinfo.buffer  = &sr;
+          QSPI_COMMAND(qspi, &cmdinfo);
+        }
+      while ((sr & MX25_SR_WIP) != 0);
+
+      finfo("XSPI: protection cleared, SR=0x%02x\n", sr);
+    }
+
+  QSPI_LOCK(qspi, false);
+}
 
 /****************************************************************************
  * Public Functions
@@ -122,6 +207,13 @@ int stm32_xspi_setup(void)
       fwarn("WARNING: mx25rxx_initialize failed (expected for MX25UM)\n");
       return OK;
     }
+
+  /* Clear block protection bits if set.  Must be done after
+   * mx25rxx_initialize (which enters 4-byte address mode) but before
+   * any erase/write operations.
+   */
+
+  mx25_flash_unprotect(qspi);
 
 #ifdef CONFIG_MTD_PARTITION
   /* Query flash geometry to compute filesystem partition size */
@@ -188,14 +280,6 @@ int stm32_xspi_setup(void)
         {
           ferr("ERROR: littlefs format+mount failed: %d\n", ret);
         }
-      else
-        {
-          finfo("littlefs formatted and mounted at /mnt\n");
-        }
-    }
-  else
-    {
-      finfo("littlefs mounted at /mnt\n");
     }
 #endif /* CONFIG_FS_LITTLEFS */
 
