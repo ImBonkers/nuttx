@@ -114,6 +114,31 @@
 #define NPU_MCPY_BYTES    96
 #define NPU_MCPY_ELEMENTS 96
 
+/* CACHEAXI register offsets (base = STM32_CACHEAXI_BASE = 0x580DFC00) */
+
+#define CACHEAXI_CR1          0x00
+#define CACHEAXI_SR           0x04
+#define CACHEAXI_FCR          0x0c
+#define CACHEAXI_CR2          0x100
+#define CACHEAXI_CMDRSADDRR   0x104
+#define CACHEAXI_CMDREADDRR   0x108
+
+/* SR bits */
+
+#define CACHEAXI_SR_BUSYF     (1 << 0)
+#define CACHEAXI_SR_BUSYCMDF  (1 << 3)
+#define CACHEAXI_SR_CMDENDF   (1 << 4)
+
+/* CR2 CACHECMD encoding */
+
+#define CACHEAXI_CR2_STARTCMD (1 << 0)
+#define CACHEAXI_CR2_CLEAN    (1 << 1)          /* CACHECMD = 01: clean */
+#define CACHEAXI_CR2_CLEANINV ((1 << 1) | (1 << 2))  /* CACHECMD = 11: clean+inv */
+
+/* FCR: clear BSYENDF + CMDENDF */
+
+#define CACHEAXI_FCR_CLEARALL 0x12
+
 #endif /* CONFIG_STM32N6_NPU */
 
 /****************************************************************************
@@ -127,6 +152,52 @@
 
 #define NPU_SRC_ADDR  0x34100000  /* SRAM2 src buffer */
 #define NPU_DST_ADDR  0x34100100  /* SRAM2 dst buffer */
+
+/****************************************************************************
+ * Name: cacheaxi_clean_invalidate_range
+ *
+ * Description:
+ *   Flush CACHEAXI write-back cache for an address range so that CPU can
+ *   read data written by the NPU through CACHEAXI.  Without this, NPU
+ *   writes with CACHEABLE=1 stay in CACHEAXI and never reach SRAM.
+ *
+ ****************************************************************************/
+
+static void cacheaxi_clean_invalidate_range(uintptr_t addr, size_t size)
+{
+  uint32_t base = STM32_CACHEAXI_BASE;
+  volatile int timeout;
+
+  /* Wait if a previous command is still in progress */
+
+  timeout = 100000;
+  while ((getreg32(base + CACHEAXI_SR) & CACHEAXI_SR_BUSYCMDF)
+         && --timeout > 0);
+
+  /* Clear pending flags */
+
+  putreg32(CACHEAXI_FCR_CLEARALL, base + CACHEAXI_FCR);
+
+  /* Set address range: start and end (inclusive) */
+
+  putreg32(addr, base + CACHEAXI_CMDRSADDRR);
+  putreg32(addr + size - 1, base + CACHEAXI_CMDREADDRR);
+
+  /* Set command = clean+invalidate, then start */
+
+  modifyreg32(base + CACHEAXI_CR2, 0x07,
+              CACHEAXI_CR2_CLEANINV | CACHEAXI_CR2_STARTCMD);
+
+  /* Poll for completion */
+
+  timeout = 100000;
+  while (!(getreg32(base + CACHEAXI_SR) & CACHEAXI_SR_CMDENDF)
+         && --timeout > 0);
+
+  /* Clear flags for next operation */
+
+  putreg32(CACHEAXI_FCR_CLEARALL, base + CACHEAXI_FCR);
+}
 #endif
 
 /****************************************************************************
@@ -388,7 +459,7 @@ int stm32_bringup(void)
       putreg32(0x00000024, se0 + STRENG_POS);
       putreg32(0x04, se0 + STRENG_LIMITEN);
       putreg32(1, se0 + STRENG_LIMIT);
-      putreg32(0x01, se0 + STRENG_CID_CACHE);  /* CID=1, non-cacheable */
+      putreg32(0x01, se0 + STRENG_CID_CACHE);  /* CID=1, non-cacheable (SRAM) */
       ctrl = STRENG_CTRL_SINGLE | STRENG_CTRL_RAW | STRENG_CTRL_SIZE_8BIT;
       putreg32(ctrl, se0 + STRENG_CTRL);
 
@@ -408,7 +479,7 @@ int stm32_bringup(void)
       putreg32(0x00000024, se1 + STRENG_POS);
       putreg32(0x04, se1 + STRENG_LIMITEN);
       putreg32(1, se1 + STRENG_LIMIT);
-      putreg32(0x01, se1 + STRENG_CID_CACHE);  /* CID=1, non-cacheable */
+      putreg32(0x01, se1 + STRENG_CID_CACHE);  /* CID=1, non-cacheable (SRAM) */
       ctrl = STRENG_CTRL_SINGLE | STRENG_CTRL_DIR | STRENG_CTRL_RAW
              | STRENG_CTRL_SIZE_8BIT;
       putreg32(ctrl, se1 + STRENG_CTRL);
@@ -431,7 +502,11 @@ int stm32_bringup(void)
       while ((getreg32(se1 + STRENG_CTRL) & STRENG_CTRL_RUNNING)
              && --timeout > 0);
 
-      /* Check result */
+      /* Invalidate CPU D-cache so we read fresh data from SRAM.
+       * CACHEAXI flush is not needed here because SRAM transfers use
+       * non-cacheable mode (CID_CACHE=0x01).  CACHEAXI caching
+       * (CID_CACHE=0x19) is for XSPI flash reads (AI model weights).
+       */
 
       up_invalidate_dcache((uintptr_t)dst,
                            (uintptr_t)dst + NPU_MCPY_BYTES);
