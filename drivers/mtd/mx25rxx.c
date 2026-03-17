@@ -84,8 +84,10 @@
 #define MX25R_EXSO        0xc1  /* Exit secured OTP         */
 #define MX25R_RDSCUR      0x2b  /* Read security register   */
 #define MX25R_WRSCUR      0x2f  /* Write security register  */
+#ifdef CONFIG_ARCH_CHIP_STM32N6
 #define MX25R_EN4B        0xb7  /* Enter 4-byte address mode */
 #define MX25R_EX4B        0xe9  /* Exit 4-byte address mode  */
+#endif
 #define MX25R_RSTEN       0x66  /* Reset Enable             */
 #define MX25R_RST         0x99  /* Reset Memory             */
 #define MX25R_RDSFDP      0x5a  /* read out until CS# high  */
@@ -108,11 +110,15 @@
 #else
 #  define MX25R_JEDEC_MEMORY_TYPE          0x28  /* MX25Rx memory type */
 #endif
+#ifdef CONFIG_ARCH_CHIP_STM32N6
 #define MX25R_JEDEC_MEMORY_TYPE_OPI      0x80  /* MX25UMx OPI memory type */
+#endif
 #define MX25R_JEDEC_MX25L25673G_CAPACITY 0x19  /* MX25L25673G memory capacity */
 #define MX25R_JEDEC_MX25R6435F_CAPACITY  0x17  /* MX25R6435F memory capacity */
 #define MX25R_JEDEC_MX25R8035F_CAPACITY  0x14  /* MX25R8035F memory capacity */
+#ifdef CONFIG_ARCH_CHIP_STM32N6
 #define MX25R_JEDEC_MX25UM51245G_CAPACITY 0x3a /* MX25UM51245G memory capacity */
+#endif
 
 /* Supported chips parameters */
 
@@ -123,12 +129,14 @@
 #define MX25R6435F_SECTOR_COUNT     (2048)
 #define MX25R6435F_PAGE_SIZE        (256)
 
+#ifdef CONFIG_ARCH_CHIP_STM32N6
 /* MX25UM51245G (64 MB) memory capacity */
 
 #define MX25UM51245G_SECTOR_SIZE      (4*1024)
 #define MX25UM51245G_SECTOR_SHIFT     (12)
 #define MX25UM51245G_SECTOR_COUNT     (16384)
 #define MX25UM51245G_PAGE_SIZE        (256)
+#endif
 
 /* MX25L25673G (256 MB) memory capacity */
 
@@ -140,11 +148,15 @@
 #ifdef CONFIG_MX25RXX_PAGE128
 #  define MX25R6435F_PAGE_SHIFT      (7)
 #  define MX25L25673G_PAGE_SHIFT     (7)
-#  define MX25UM51245G_PAGE_SHIFT    (7)
+#  ifdef CONFIG_ARCH_CHIP_STM32N6
+#    define MX25UM51245G_PAGE_SHIFT  (7)
+#  endif
 #else
 #  define MX25R6435F_PAGE_SHIFT      (8)
 #  define MX25L25673G_PAGE_SHIFT     (8)
-#  define MX25UM51245G_PAGE_SHIFT    (8)
+#  ifdef CONFIG_ARCH_CHIP_STM32N6
+#    define MX25UM51245G_PAGE_SHIFT  (8)
+#  endif
 #endif
 
 /* Status register bit definitions */
@@ -201,7 +213,9 @@ struct mx25rxx_dev_s
 
   uint8_t                sectorshift; /* Log2 of sector size */
   uint8_t                pageshift;   /* Log2 of page size */
+#ifdef CONFIG_ARCH_CHIP_STM32N6
   uint8_t                addrlen;     /* Address length: 3 or 4 bytes */
+#endif
   uint16_t               nsectors;    /* Number of erase sectors */
 
 #ifdef CONFIG_MX25RXX_SECTOR512
@@ -383,6 +397,7 @@ int mx25rxx_read_byte(FAR struct mx25rxx_dev_s *dev, FAR uint8_t *buffer,
 
   finfo("address: %08lx nbytes: %d\n", (long)address, (int)buflen);
 
+#ifdef CONFIG_ARCH_CHIP_STM32N6
   if (dev->addrlen == 4)
     {
       /* MX25UM: use standard SPI read with 4-byte address, 8 dummy cycles */
@@ -393,6 +408,7 @@ int mx25rxx_read_byte(FAR struct mx25rxx_dev_s *dev, FAR uint8_t *buffer,
       meminfo.cmd     = MX25R_FAST_READ;
     }
   else
+#endif
     {
       /* MX25R/MX25L: use Quad IO read with 3-byte address */
 
@@ -427,6 +443,7 @@ int mx25rxx_write_page(FAR struct mx25rxx_dev_s *priv,
 
   /* Set up non-varying parts of transfer description */
 
+#ifdef CONFIG_ARCH_CHIP_STM32N6
   if (priv->addrlen == 4)
     {
       /* MX25UM: standard SPI page program with 4-byte address */
@@ -436,6 +453,7 @@ int mx25rxx_write_page(FAR struct mx25rxx_dev_s *priv,
       meminfo.addrlen = 4;
     }
   else
+#endif
     {
       /* MX25R/MX25L: Quad page program with 3-byte address */
 
@@ -501,7 +519,11 @@ int mx25rxx_erase_sector(FAR struct mx25rxx_dev_s *priv, off_t sector)
   /* Send the sector erase command */
 
   mx25rxx_write_enable(priv, true);
+#ifdef CONFIG_ARCH_CHIP_STM32N6
   mx25rxx_command_address(priv->qspi, MX25R_SE, address, priv->addrlen);
+#else
+  mx25rxx_command_address(priv->qspi, MX25R_SE, address, 3);
+#endif
 
   /* Wait for erasure to finish */
 
@@ -890,11 +912,15 @@ int mx25rxx_readid(FAR struct mx25rxx_dev_s *dev)
   finfo("Manufacturer: %02x Device Type %02x, Capacity: %02x\n",
         dev->cmdbuf[0], dev->cmdbuf[1], dev->cmdbuf[2]);
 
-  /* Check for Macronix MX25Rxx/MX25Lxx/MX25UMxx chip */
+  /* Check for Macronix MX25Rxx chip */
 
   if (dev->cmdbuf[0] != MX25R_JEDEC_MANUFACTURER ||
+#ifdef CONFIG_ARCH_CHIP_STM32N6
       (dev->cmdbuf[1] != MX25R_JEDEC_MEMORY_TYPE &&
        dev->cmdbuf[1] != MX25R_JEDEC_MEMORY_TYPE_OPI))
+#else
+      dev->cmdbuf[1] != MX25R_JEDEC_MEMORY_TYPE)
+#endif
     {
       ferr("ERROR: Unrecognized device type: 0x%02x 0x%02x\n",
            dev->cmdbuf[0], dev->cmdbuf[1]);
@@ -909,22 +935,28 @@ int mx25rxx_readid(FAR struct mx25rxx_dev_s *dev)
         dev->sectorshift = MX25R6435F_SECTOR_SHIFT;
         dev->pageshift   = MX25R6435F_PAGE_SHIFT;
         dev->nsectors    = MX25R6435F_SECTOR_COUNT;
+#ifdef CONFIG_ARCH_CHIP_STM32N6
         dev->addrlen     = 3;
+#endif
         break;
 
       case MX25R_JEDEC_MX25L25673G_CAPACITY:
         dev->sectorshift = MX25L25673G_SECTOR_SHIFT;
         dev->pageshift   = MX25L25673G_PAGE_SHIFT;
         dev->nsectors    = MX25L25673G_SECTOR_COUNT;
+#ifdef CONFIG_ARCH_CHIP_STM32N6
         dev->addrlen     = 4;
+#endif
         break;
 
+#ifdef CONFIG_ARCH_CHIP_STM32N6
       case MX25R_JEDEC_MX25UM51245G_CAPACITY:
         dev->sectorshift = MX25UM51245G_SECTOR_SHIFT;
         dev->pageshift   = MX25UM51245G_PAGE_SHIFT;
         dev->nsectors    = MX25UM51245G_SECTOR_COUNT;
         dev->addrlen     = 4;
         break;
+#endif
 
       default:
         ferr("ERROR: Unsupported memory capacity: %02x\n", dev->cmdbuf[2]);
@@ -1237,6 +1269,7 @@ FAR struct mtd_dev_s *mx25rxx_initialize(FAR struct qspi_dev_s *qspi,
 
   mx25rxx_lock(dev->qspi, false);
 
+#ifdef CONFIG_ARCH_CHIP_STM32N6
   /* Enter 4-byte address mode for large (>16MB) flash devices */
 
   if (dev->addrlen == 4)
@@ -1244,13 +1277,15 @@ FAR struct mtd_dev_s *mx25rxx_initialize(FAR struct qspi_dev_s *qspi,
       mx25rxx_command(dev->qspi, MX25R_EN4B);
     }
 
-  /* Set MTD device in low power mode, with minimum dummy cycles.
-   * Skip QE/config write for OPI flash (MX25UM) — only valid for
+  /* Skip QE/config write for OPI flash (MX25UM) — only valid for
    * MX25R/MX25L quad-SPI parts.
    */
 
   if (dev->addrlen < 4)
+#endif
     {
+      /* Set MTD device in low power mode, with minimum dummy cycles */
+
       mx25rxx_write_status_config(dev, MX25R_SR_QE, 0x0000);
     }
 
