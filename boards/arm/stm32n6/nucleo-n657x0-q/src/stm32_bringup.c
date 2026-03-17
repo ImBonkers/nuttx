@@ -295,22 +295,16 @@ int stm32_bringup(void)
     syslog(LOG_INFO, "NPU scan: %d/%d blocks alive, CACHEAXI EN\n",
            pass, total);
 
-    /* Step 6: SMPS overdrive (PB12 HIGH) — required for NPU AXI.
-     * Then STRENG memcopy test: SE0→STRSWITCH→SE1, 96 bytes.
+    /* SMPS overdrive (PB12 HIGH) is now done early in
+     * stm32_configure_pll2_pll3() before PLL2/PLL3 are enabled.
      */
-
-    putreg32(RCC_AHB4ENR_GPIOBEN, STM32_RCC_AHB4ENSR);
-    stm32_configgpio(GPIO_OUTPUT | GPIO_PUSHPULL | GPIO_SPEED_50MHZ
-                      | GPIO_PORTB | GPIO_PIN12);
-    stm32_gpiowrite(GPIO_OUTPUT | GPIO_PORTB | GPIO_PIN12, true);
-    up_mdelay(2);
 
     /* Enable ALL bus + memory clocks */
 
     putreg32(0xffffffff, STM32_RCC_BUSENSR);
     putreg32(0xffffffff, STM32_RCC_MEMENSR);
 
-    /* Step 6b: STRENG memcopy test — 96 bytes in SRAM2 */
+    /* STRENG memcopy test — 96 bytes in SRAM2 */
 
     {
 #define STRENG_POS  0x24

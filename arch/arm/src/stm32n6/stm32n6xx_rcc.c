@@ -184,6 +184,34 @@ static void stm32_configure_pll2_pll3(void)
   volatile int32_t timeout;
   uint32_t regval;
 
+  /* SMPS overdrive: set PB12 HIGH before enabling high-frequency PLLs.
+   * The external SMPS on PB12 controls core voltage — overdrive is
+   * required for NPU at 1000 MHz (IC6) and NPU SRAM at 900 MHz (IC11).
+   * The x-cube BSP does BSP_SMPS_Init(SMPS_VOLTAGE_OVERDRIVE) before
+   * any PLL configuration.  GPIOB clock was already enabled by
+   * rcc_enableahb4() when called from stm32_rcc_enableperipherals()
+   * in the full config path.  In the FSBL early-return path, GPIOB
+   * is already clocked by the FSBL.  Enable it defensively here.
+   */
+
+  putreg32(RCC_AHB4ENR_GPIOBEN, STM32_RCC_AHB4ENSR);  /* GPIOB clock */
+
+  /* Configure PB12 as push-pull output, very high speed.
+   * GPIOB base (Secure) = 0x56020400.
+   * MODER[25:24] = 01 (output), OTYPER[12] = 0 (push-pull),
+   * OSPEEDR[25:24] = 11 (very high), BSRR[12] = 1 (set HIGH).
+   */
+
+#define GPIOB_BASE_S  0x56020400
+  modifyreg32(GPIOB_BASE_S + 0x00, (3 << 24), (1 << 24));  /* MODER: output */
+  modifyreg32(GPIOB_BASE_S + 0x04, (1 << 12), 0);          /* OTYPER: PP */
+  modifyreg32(GPIOB_BASE_S + 0x08, (3 << 24), (3 << 24));  /* OSPEEDR: VH */
+  putreg32((1 << 12), GPIOB_BASE_S + 0x18);                 /* BSRR: set */
+
+  /* Brief delay for SMPS voltage ramp (~100 mV increase at ~1 mV/us) */
+
+  for (timeout = 200 * CONFIG_BOARD_LOOPSPERMSEC; timeout > 0; timeout--);
+
   /* --- PLL2: 1000 MHz for NPU core (IC6) --- */
 
   /* Disable IC6 before changing its source */
