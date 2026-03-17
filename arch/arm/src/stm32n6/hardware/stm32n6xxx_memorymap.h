@@ -137,6 +137,10 @@
 #define STM32_RNG_BASE        0x54020000    /* RNG (AHB3, Secure) */
 #define STM32_RIFSC_BASE      0x54024000    /* RIFSC (AHB3, Secure) */
 
+/* AHB2 peripherals *********************************************************/
+
+#define STM32_RAMCFG_BASE     0x52023000    /* RAMCFG (AHB2, Secure) */
+
 /* AHB5 peripherals *********************************************************/
 
 #define STM32_AHB5_BASE       0x58020000    /* AHB5 (Secure) */
@@ -147,6 +151,8 @@
 #define STM32_USB1_OTG_HS_BASE  0x58040000  /* USB1 OTG HS (Secure) */
 #define STM32_USB2_OTG_HS_BASE  0x58080000  /* USB2 OTG HS (Secure) */
 #define STM32_USB2_HS_PHYC_BASE 0x580C0000  /* USB2 HS PHY controller (Secure) */
+#define STM32_CACHEAXI_BASE     0x580DFC00  /* CACHEAXI NPU cache (AHB5, Secure) */
+#define STM32_NPU_BASE          0x580E0000  /* NPU / ATON (AHB5, Secure) */
 
 /* SYSCFG *******************************************************************/
 

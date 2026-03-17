@@ -43,6 +43,8 @@
 
 #define HSIRDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
 #define PLL1RDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
+#define PLL2RDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
+#define PLL3RDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
 
 /****************************************************************************
  * Private Functions
@@ -162,12 +164,149 @@ void stm32_rcc_enableperipherals(void)
 }
 
 /****************************************************************************
+ * Name: stm32_configure_pll2_pll3
+ *
+ * Description:
+ *   Configure PLL2 and PLL3 for NPU clocks.  Called from both DEV mode
+ *   (full clock config) and FSBL mode (PLL1/CFGR1 already done).
+ *
+ *   PLL2: HSI/8 * 125 = 1000 MHz VCO, PDIV1=1, PDIV2=1 → 1000 MHz
+ *         → IC6  /1  = 1000 MHz  (NPU core clock via SYSSW)
+ *
+ *   PLL3: HSI/8 * 225 = 1800 MHz VCO, PDIV1=1, PDIV2=2 → 900 MHz
+ *         → IC11 /1  = 900 MHz   (NPU SRAM clock via SYSSW)
+ *
+ ****************************************************************************/
+
+#ifdef CONFIG_STM32N6_NPU
+static void stm32_configure_pll2_pll3(void)
+{
+  volatile int32_t timeout;
+  uint32_t regval;
+
+  /* --- PLL2: 1000 MHz for NPU core (IC6) --- */
+
+  /* Disable IC6 before changing its source */
+
+  putreg32(RCC_DIVENR_IC6EN, STM32_RCC_DIVENCR);
+
+  /* Disable PLL2 */
+
+  putreg32(RCC_CR_PLL2ON, STM32_RCC_CCR);
+
+  for (timeout = PLL2RDY_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(STM32_RCC_SR) & RCC_SR_PLL2RDY) == 0)
+        {
+          break;
+        }
+    }
+
+  /* Configure PLL2CFGR1: source=HSI, M=8, N=125
+   *   VCO_in  = 64 MHz / 8 = 8 MHz
+   *   VCO_out = 8 MHz * 125 = 1000 MHz
+   */
+
+  regval = (RCC_PLL1CFGR1_SEL_HSI)
+         | (8 << RCC_PLL1CFGR1_DIVM_SHIFT)
+         | (125 << RCC_PLL1CFGR1_DIVN_SHIFT);
+  putreg32(regval, STM32_RCC_PLL2CFGR1);
+
+  /* Configure PLL2CFGR3: disable SS, PDIV1=1, PDIV2=1, enable post-div */
+
+  regval = RCC_PLL1CFGR3_MODSSDIS
+         | RCC_PLL1CFGR3_PDIVEN
+         | (1 << RCC_PLL1CFGR3_PDIV1_SHIFT)
+         | (1 << RCC_PLL1CFGR3_PDIV2_SHIFT);
+  putreg32(regval, STM32_RCC_PLL2CFGR3);
+
+  /* Enable PLL2 */
+
+  putreg32(RCC_CR_PLL2ON, STM32_RCC_CSR);
+
+  for (timeout = PLL2RDY_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(STM32_RCC_SR) & RCC_SR_PLL2RDY) != 0)
+        {
+          break;
+        }
+    }
+
+  /* --- PLL3: 900 MHz for NPU SRAM (IC11) --- */
+
+  /* Disable IC11 before changing its source */
+
+  putreg32(RCC_DIVENR_IC11EN, STM32_RCC_DIVENCR);
+
+  /* Disable PLL3 */
+
+  putreg32(RCC_CR_PLL3ON, STM32_RCC_CCR);
+
+  for (timeout = PLL3RDY_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(STM32_RCC_SR) & RCC_SR_PLL3RDY) == 0)
+        {
+          break;
+        }
+    }
+
+  /* Configure PLL3CFGR1: source=HSI, M=8, N=225
+   *   VCO_in  = 64 MHz / 8 = 8 MHz
+   *   VCO_out = 8 MHz * 225 = 1800 MHz
+   */
+
+  regval = (RCC_PLL1CFGR1_SEL_HSI)
+         | (8 << RCC_PLL1CFGR1_DIVM_SHIFT)
+         | (225 << RCC_PLL1CFGR1_DIVN_SHIFT);
+  putreg32(regval, STM32_RCC_PLL3CFGR1);
+
+  /* Configure PLL3CFGR3: disable SS, PDIV1=1, PDIV2=2, enable post-div
+   *   PLL3 output = VCO / PDIV2 = 1800 / 2 = 900 MHz
+   */
+
+  regval = RCC_PLL1CFGR3_MODSSDIS
+         | RCC_PLL1CFGR3_PDIVEN
+         | (1 << RCC_PLL1CFGR3_PDIV1_SHIFT)
+         | (2 << RCC_PLL1CFGR3_PDIV2_SHIFT);
+  putreg32(regval, STM32_RCC_PLL3CFGR3);
+
+  /* Enable PLL3 */
+
+  putreg32(RCC_CR_PLL3ON, STM32_RCC_CSR);
+
+  for (timeout = PLL3RDY_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(STM32_RCC_SR) & RCC_SR_PLL3RDY) != 0)
+        {
+          break;
+        }
+    }
+
+  /* Re-source IC6 to PLL2/1 (1000 MHz) and IC11 to PLL3/1 (900 MHz).
+   * ICxCFGR can be modified independently of CFGR1.
+   */
+
+  putreg32(RCC_ICCFGR_SEL_PLL2 | (0 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC6CFGR);   /* IC6: PLL2/1 = 1000 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL3 | (0 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC11CFGR);  /* IC11: PLL3/1 = 900 MHz */
+
+  /* Re-enable IC6 and IC11 */
+
+  putreg32(RCC_DIVENR_IC6EN | RCC_DIVENR_IC11EN, STM32_RCC_DIVENSR);
+
+  __asm volatile ("dsb sy");
+  __asm volatile ("isb sy");
+}
+#endif /* CONFIG_STM32N6_NPU */
+
+/****************************************************************************
  * Name: stm32_stdclockconfig
  *
  * Description:
  *   Configure PLL1 for 600 MHz CPU clock, matching the FSBL configuration.
  *
- *   Clock tree:
+ *   Clock tree (base, without NPU):
  *     HSI 64 MHz -> PLL1 (M=4, N=75) -> VCO 1200 MHz -> PDIV1/1 -> 1200 MHz
  *       -> IC1  /2  = 600 MHz  (CPU clock via CPUSW)
  *       -> IC2  /3  = 400 MHz  \
@@ -176,6 +315,10 @@ void stm32_rcc_enableperipherals(void)
  *       -> HPRE /2  = 200 MHz  (HCLK)
  *       -> PPRE1 /1 = 200 MHz  (APB1 = PCLK1)
  *       -> PPRE2 /1 = 200 MHz  (APB2 = PCLK2)
+ *
+ *   With CONFIG_STM32N6_NPU, IC6/IC11 are re-sourced from PLL2/PLL3:
+ *       -> IC6  = PLL2/1 = 1000 MHz (NPU core)
+ *       -> IC11 = PLL3/1 = 900 MHz  (NPU SRAM)
  *
  *   IMPORTANT: CFGR1 locks after the first write — CPUSW and SYSSW must
  *   be written together in a single putreg32().  CFGR2 (bus prescalers)
@@ -189,14 +332,18 @@ void stm32_stdclockconfig(void)
   uint32_t regval;
 
   /* If clocks are already configured (e.g. FSBL set up PLL1 and switched
-   * CPUSW to IC1), skip reconfiguration.  CFGR1 locks after the first
-   * write — a second write crashes the system (SRAM goes offline).
+   * CPUSW to IC1), skip PLL1/CFGR1 reconfiguration.  CFGR1 locks after
+   * the first write — a second write crashes the system (SRAM goes
+   * offline).  However, PLL2/PLL3 for NPU still need to be configured.
    */
 
   regval = getreg32(STM32_RCC_CFGR1);
   if ((regval & RCC_CFGR1_CPUSWS_MASK) == RCC_CFGR1_CPUSWS_IC1 &&
       (regval & RCC_CFGR1_SYSSWS_MASK) == RCC_CFGR1_SYSSWS_IC2_IC6_IC11)
     {
+#ifdef CONFIG_STM32N6_NPU
+      stm32_configure_pll2_pll3();
+#endif
       return;
     }
 
@@ -256,8 +403,8 @@ void stm32_stdclockconfig(void)
    *    IC1  = PLL1 / 2  = 600 MHz  (CPU)
    *    IC2  = PLL1 / 3  = 400 MHz  (SYSCLK)
    *    IC3  = PLL1 / 6  = 200 MHz  (XSPI2 kernel clock)
-   *    IC6  = PLL1 / 4  = 300 MHz  (AHB / NPU)
-   *    IC11 = PLL1 / 3  = 400 MHz  (APB / NPU RAMS)
+   *    IC6  = PLL1 / 4  = 300 MHz  (AHB — will be re-sourced if NPU)
+   *    IC11 = PLL1 / 3  = 400 MHz  (APB — will be re-sourced if NPU)
    */
 
   putreg32(RCC_ICCFGR_SEL_PLL1 | (1 << RCC_ICCFGR_INT_SHIFT),
@@ -316,4 +463,13 @@ void stm32_stdclockconfig(void)
           break;
         }
     }
+
+  /* 10. Configure PLL2/PLL3 for NPU if enabled.  This is done after
+   *     CFGR1 is written so PLL1 is already driving the system bus.
+   *     IC6/IC11 will be re-sourced from PLL2/PLL3.
+   */
+
+#ifdef CONFIG_STM32N6_NPU
+  stm32_configure_pll2_pll3();
+#endif
 }

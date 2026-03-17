@@ -133,6 +133,7 @@
 /* Atomic SET variants of misc enable registers (offset + 0x800) */
 
 #define STM32_RCC_DIVENSR_OFFSET       0x0a40  /* IC dividers enable SET register */
+#define STM32_RCC_DIVENCR_OFFSET       0x1240  /* IC dividers enable CLEAR register */
 #define STM32_RCC_BUSENSR_OFFSET       0x0a44  /* Embedded buses enable SET register */
 #define STM32_RCC_MEMENSR_OFFSET       0x0a4c  /* Embedded memories enable SET register */
 
@@ -223,6 +224,8 @@
 #define STM32_RCC_PLL2CFGR3    (STM32_RCC_BASE + STM32_RCC_PLL2CFGR3_OFFSET)
 
 #define STM32_RCC_PLL3CFGR1    (STM32_RCC_BASE + STM32_RCC_PLL3CFGR1_OFFSET)
+#define STM32_RCC_PLL3CFGR2    (STM32_RCC_BASE + STM32_RCC_PLL3CFGR2_OFFSET)
+#define STM32_RCC_PLL3CFGR3    (STM32_RCC_BASE + STM32_RCC_PLL3CFGR3_OFFSET)
 #define STM32_RCC_PLL4CFGR1    (STM32_RCC_BASE + STM32_RCC_PLL4CFGR1_OFFSET)
 
 #define STM32_RCC_IC1CFGR      (STM32_RCC_BASE + STM32_RCC_IC1CFGR_OFFSET)
@@ -263,6 +266,7 @@
 
 #define STM32_RCC_DIVENR       (STM32_RCC_BASE + STM32_RCC_DIVENR_OFFSET)
 #define STM32_RCC_DIVENSR      (STM32_RCC_BASE + STM32_RCC_DIVENSR_OFFSET)
+#define STM32_RCC_DIVENCR      (STM32_RCC_BASE + STM32_RCC_DIVENCR_OFFSET)
 #define STM32_RCC_BUSENR       (STM32_RCC_BASE + STM32_RCC_BUSENR_OFFSET)
 #define STM32_RCC_BUSENSR      (STM32_RCC_BASE + STM32_RCC_BUSENSR_OFFSET)
 #define STM32_RCC_MEMENR       (STM32_RCC_BASE + STM32_RCC_MEMENR_OFFSET)
@@ -503,6 +507,10 @@
 
 #define RCC_AHB1RSTR_ADC12RST     (1 << 5)   /* Bit 5:  ADC1/ADC2 reset */
 
+/* AHB2 Peripheral Clock Enable Register (RCC_AHB2ENR) */
+
+#define RCC_AHB2ENR_RAMCFGEN      (1 << 12)  /* Bit 12: RAMCFG clock enable */
+
 /* AHB3 Peripheral Clock Enable Register (RCC_AHB3ENR) */
 
 #define RCC_AHB3ENR_RNGEN         (1 << 0)   /* Bit 0:  RNG clock enable */
@@ -526,6 +534,7 @@
 #define RCC_AHB5ENR_OTGPHY2EN     (1 << 28)  /* Bit 28: USB2 PHY clock enable */
 #define RCC_AHB5ENR_OTG2EN        (1 << 29)  /* Bit 29: USB2 OTG controller clock enable */
 #define RCC_AHB5ENR_CACHEAXIEN    (1 << 30)  /* Bit 30: CACHEAXI clock enable */
+#define RCC_AHB5ENR_NPUEN         (1u << 31) /* Bit 31: NPU clock enable */
 
 /* HSE Configuration Register (RCC_HSECFGR) */
 
@@ -541,6 +550,7 @@
 #define RCC_AHB5RSTR_OTGPHY1RST      (1 << 27)  /* Bit 27: USB1 PHY reset */
 #define RCC_AHB5RSTR_OTGPHY2RST      (1 << 28)  /* Bit 28: USB2 PHY reset */
 #define RCC_AHB5RSTR_OTG2RST         (1 << 29)  /* Bit 29: USB2 OTG controller reset */
+#define RCC_AHB5RSTR_NPURST          (1u << 31) /* Bit 31: NPU reset */
 
 /* APB1 Peripheral Reset Register 1 (RCC_APB1RSTR1) */
 

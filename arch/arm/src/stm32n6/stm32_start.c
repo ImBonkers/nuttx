@@ -368,8 +368,25 @@ void __start(void)
 
   putreg32(0x01, STM32_RCC_BASE + 0x0aa4);    /* APB1LPENSR1: TIM2 */
   putreg32(0x10, STM32_RCC_BASE + 0x0aac);    /* APB2LPENSR: USART1 */
-  putreg32((1 << 26) | (1 << 27),
-           STM32_RCC_BASE + 0x0aa0);           /* AHB5LPENSR: OTG1+OTGPHY1 */
+  putreg32((1 << 26) | (1 << 27)
+#ifdef CONFIG_STM32N6_NPU
+         | (1 << 30)                           /* CACHEAXI sleep clock enable */
+         | (1u << 31)                          /* NPU sleep clock enable */
+#endif
+         , STM32_RCC_BASE + 0x0aa0);           /* AHB5LPENSR: OTG1+OTGPHY1[+NPU+CACHEAXI] */
+
+  /* Enable NPU clock and perform reset if NPU support is configured.
+   * The NPU is on AHB5.  Assert reset, then release after a brief delay,
+   * then enable the NPU clock.
+   */
+
+#ifdef CONFIG_STM32N6_NPU
+  putreg32(RCC_AHB5RSTR_NPURST, STM32_RCC_AHB5RSTSR);
+  __asm volatile ("dsb sy");
+  putreg32(RCC_AHB5RSTR_NPURST, STM32_RCC_AHB5RSTCR);
+  putreg32(RCC_AHB5ENR_NPUEN | RCC_AHB5ENR_CACHEAXIEN,
+           STM32_RCC_AHB5ENSR);
+#endif
 
   stm32_pwr_enablevddio();
 

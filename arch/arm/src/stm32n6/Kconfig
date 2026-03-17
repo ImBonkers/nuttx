@@ -367,6 +367,14 @@ config STM32N6_XSPI_DMATHRESHOLD
 		Minimum number of bytes for DMA transfer. Transfers smaller
 		than this use polling instead.
 
+config STM32N6_NPU
+	bool "NPU (Neural-ART accelerator)"
+	default n
+	---help---
+		Enable NPU support. Configures PLL2 (1000 MHz) and PLL3
+		(900 MHz) for NPU core and SRAM clocks, and enables the
+		NPU peripheral clock on AHB5.
+
 endmenu
 
 menu "RTC Configuration"

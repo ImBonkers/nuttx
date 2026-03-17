@@ -48,6 +48,12 @@
  *     HPRE /2  = 200 MHz  -> HCLK
  *     PPRE1 /1 = 200 MHz  -> APB1 (PCLK1)
  *     PPRE2 /1 = 200 MHz  -> APB2 (PCLK2)
+ *
+ * With CONFIG_STM32N6_NPU, PLL2/PLL3 are also configured:
+ *   HSI 64 MHz -> PLL2 (M=8, N=125) -> 1000 MHz
+ *     IC6  /1  = 1000 MHz -> NPU core (replaces PLL1/4)
+ *   HSI 64 MHz -> PLL3 (M=8, N=225, P2=2) -> 900 MHz
+ *     IC11 /1  = 900 MHz  -> NPU SRAM (replaces PLL1/3)
  */
 
 #define STM32_HSI_FREQUENCY     64000000ul
@@ -56,6 +62,13 @@
 #define STM32_HCLK_FREQUENCY    200000000ul  /* SYSCLK / HPRE(2) = 200 MHz */
 #define STM32_PCLK1_FREQUENCY   200000000ul  /* HCLK / PPRE1(1) = 200 MHz */
 #define STM32_PCLK2_FREQUENCY   200000000ul  /* HCLK / PPRE2(1) = 200 MHz */
+
+/* PLL2/PLL3 frequencies for NPU support */
+
+#define STM32_PLL2_FREQUENCY      1000000000ul /* PLL2 VCO = 1000 MHz */
+#define STM32_PLL3_FREQUENCY       900000000ul /* PLL3 output = 900 MHz */
+#define STM32_NPU_CLK_FREQUENCY   1000000000ul /* IC6 = PLL2/1 = 1000 MHz */
+#define STM32_NPUSRAM_FREQUENCY    900000000ul /* IC11 = PLL3/1 = 900 MHz */
 
 /* Timer input clock.  On STM32N6, RCC_CFGR2.TIMPRE[25:24] selects the
  * timer group prescaler.  With TIMPRE=0 (default), timer clock = SYSCLK
