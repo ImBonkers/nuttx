@@ -247,6 +247,15 @@ void __start(void)
   const uint32_t *src;
   uint32_t *dest;
 
+  /* Clear MSPLIM/PSPLIM stack limits that may have been set by the boot ROM
+   * (DEV boot mode).  Must happen before any stack-heavy function call to
+   * avoid an immediate STKOF fault.
+   */
+
+  __asm__ volatile ("mov r0, #0\n\t"
+                    "msr msplim, r0\n\t"
+                    "msr psplim, r0\n\t" ::: "r0");
+
   /* Set VTOR to point to our vector table.  In DEV boot mode the boot ROM
    * leaves VTOR pointing at 0x18000000 (ROM).  We must fix this before
    * any exception can fire so that our handlers are used.

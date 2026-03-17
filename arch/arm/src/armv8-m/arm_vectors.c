@@ -64,18 +64,9 @@ extern void __start(void);
 
 static void start(void)
 {
-  /* Clear MSPLIM/PSPLIM stack limits that may have been set by the boot ROM
-   * (e.g., STM32N6 DEV boot mode).  Must happen before any stack access
-   * in __start() to avoid an immediate STKOF fault.  Harmless on chips
-   * where limits are already zero.
-   *
-   * Then zero lr to mark the end of backtrace and branch to __start.
-   */
+  /* Zero lr to mark the end of backtrace */
 
-  asm volatile ("mov r0, #0\n\t"
-                "msr msplim, r0\n\t"
-                "msr psplim, r0\n\t"
-                "mov lr, #0\n\t"
+  asm volatile ("mov lr, #0\n\t"
                 "b  __start\n\t");
 }
 
