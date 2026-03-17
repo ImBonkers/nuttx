@@ -38,27 +38,27 @@
 
 /* Clocking *****************************************************************/
 
-/* PLL1 is configured for 600 MHz CPU clock:
+/* PLL1 is configured for 800 MHz CPU clock (VOS SCALE0 + SMPS overdrive):
  *
- *   HSI 64 MHz -> PLL1 (M=4, N=75, P1=1, P2=1) -> 1200 MHz
- *     IC1  /2  = 600 MHz  -> CPU (CPUSW = IC1)
- *     IC2  /3  = 400 MHz  \
- *     IC6  /4  = 300 MHz   > System bus (SYSSW)
- *     IC11 /3  = 400 MHz  /
+ *   HSI 64 MHz -> PLL1 (M=2, N=25, P1=1, P2=1) -> 800 MHz
+ *     IC1  /1  = 800 MHz  -> CPU (CPUSW = IC1)
+ *     IC2  /2  = 400 MHz  \
+ *     IC6  /3  = 267 MHz   > System bus (SYSSW)
+ *     IC11 /2  = 400 MHz  /
  *     HPRE /2  = 200 MHz  -> HCLK
  *     PPRE1 /1 = 200 MHz  -> APB1 (PCLK1)
  *     PPRE2 /1 = 200 MHz  -> APB2 (PCLK2)
  *
  * With CONFIG_STM32N6_NPU, PLL2/PLL3 are also configured:
  *   HSI 64 MHz -> PLL2 (M=8, N=125) -> 1000 MHz
- *     IC6  /1  = 1000 MHz -> NPU core (replaces PLL1/4)
+ *     IC6  /1  = 1000 MHz -> NPU core (replaces PLL1/3)
  *   HSI 64 MHz -> PLL3 (M=8, N=225, P2=2) -> 900 MHz
- *     IC11 /1  = 900 MHz  -> NPU SRAM (replaces PLL1/3)
+ *     IC11 /1  = 900 MHz  -> NPU SRAM (replaces PLL1/2)
  */
 
 #define STM32_HSI_FREQUENCY     64000000ul
-#define STM32_CPUCLK_FREQUENCY  600000000ul  /* IC1 = PLL1/2 = 600 MHz */
-#define STM32_SYSCLK_FREQUENCY  400000000ul  /* IC2 = PLL1/3 = 400 MHz */
+#define STM32_CPUCLK_FREQUENCY  800000000ul  /* IC1 = PLL1/1 = 800 MHz */
+#define STM32_SYSCLK_FREQUENCY  400000000ul  /* IC2 = PLL1/2 = 400 MHz */
 #define STM32_HCLK_FREQUENCY    200000000ul  /* SYSCLK / HPRE(2) = 200 MHz */
 #define STM32_PCLK1_FREQUENCY   200000000ul  /* HCLK / PPRE1(1) = 200 MHz */
 #define STM32_PCLK2_FREQUENCY   200000000ul  /* HCLK / PPRE2(1) = 200 MHz */

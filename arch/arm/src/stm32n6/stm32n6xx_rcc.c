@@ -41,10 +41,18 @@
  * hosed anyway.
  */
 
-#define HSIRDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
+#define HSIRDY_TIMEOUT  (100 * CONFIG_BOARD_LOOPSPERMSEC)
 #define PLL1RDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
 #define PLL2RDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
 #define PLL3RDY_TIMEOUT (100 * CONFIG_BOARD_LOOPSPERMSEC)
+#define VOS_TIMEOUT     (10 * CONFIG_BOARD_LOOPSPERMSEC)
+
+/* SMPS overdrive and VOS registers */
+
+#define GPIOB_BASE_S   0x56020400
+#define PWR_VOSCR      (STM32_PWR_BASE + 0x020)
+#define PWR_VOSCR_VOS  (1 << 0)
+#define PWR_VOSCR_RDY  (1 << 1)
 
 /****************************************************************************
  * Private Functions
@@ -202,15 +210,27 @@ static void stm32_configure_pll2_pll3(void)
    * OSPEEDR[25:24] = 11 (very high), BSRR[12] = 1 (set HIGH).
    */
 
-#define GPIOB_BASE_S  0x56020400
   modifyreg32(GPIOB_BASE_S + 0x00, (3 << 24), (1 << 24));  /* MODER: output */
   modifyreg32(GPIOB_BASE_S + 0x04, (1 << 12), 0);          /* OTYPER: PP */
   modifyreg32(GPIOB_BASE_S + 0x08, (3 << 24), (3 << 24));  /* OSPEEDR: VH */
   putreg32((1 << 12), GPIOB_BASE_S + 0x18);                 /* BSRR: set */
 
-  /* Brief delay for SMPS voltage ramp (~100 mV increase at ~1 mV/us) */
+  /* Set VOS to SCALE0 (highest performance, required for 800 MHz CPU and
+   * 1000 MHz NPU).  No fixed SMPS ramp delay needed — the VOSRDY poll
+   * provides the feedback: the regulator won't assert VOSRDY until the
+   * voltage has stabilized at the SCALE0 level, which implicitly waits
+   * for the SMPS overdrive ramp to complete.
+   */
 
-  for (timeout = 200 * CONFIG_BOARD_LOOPSPERMSEC; timeout > 0; timeout--);
+  modifyreg32(PWR_VOSCR, 0, PWR_VOSCR_VOS);
+
+  for (timeout = VOS_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(PWR_VOSCR) & PWR_VOSCR_RDY) != 0)
+        {
+          break;
+        }
+    }
 
   /* --- PLL2: 1000 MHz for NPU core (IC6) --- */
 
@@ -335,11 +355,11 @@ static void stm32_configure_pll2_pll3(void)
  *   Configure PLL1 for 600 MHz CPU clock, matching the FSBL configuration.
  *
  *   Clock tree (base, without NPU):
- *     HSI 64 MHz -> PLL1 (M=4, N=75) -> VCO 1200 MHz -> PDIV1/1 -> 1200 MHz
- *       -> IC1  /2  = 600 MHz  (CPU clock via CPUSW)
- *       -> IC2  /3  = 400 MHz  \
- *       -> IC6  /4  = 300 MHz   > System bus via SYSSW
- *       -> IC11 /3  = 400 MHz  /
+ *     HSI 64 MHz -> PLL1 (M=2, N=25) -> VCO 800 MHz -> PDIV1/1 -> 800 MHz
+ *       -> IC1  /1  = 800 MHz  (CPU clock via CPUSW)
+ *       -> IC2  /2  = 400 MHz  \
+ *       -> IC6  /3  = 267 MHz   > System bus via SYSSW
+ *       -> IC11 /2  = 400 MHz  /
  *       -> HPRE /2  = 200 MHz  (HCLK)
  *       -> PPRE1 /1 = 200 MHz  (APB1 = PCLK1)
  *       -> PPRE2 /1 = 200 MHz  (APB2 = PCLK2)
@@ -347,6 +367,8 @@ static void stm32_configure_pll2_pll3(void)
  *   With CONFIG_STM32N6_NPU, IC6/IC11 are re-sourced from PLL2/PLL3:
  *       -> IC6  = PLL2/1 = 1000 MHz (NPU core)
  *       -> IC11 = PLL3/1 = 900 MHz  (NPU SRAM)
+ *
+ *   Requires VOS SCALE0 + SMPS overdrive (PB12 HIGH) for 800 MHz CPU.
  *
  *   IMPORTANT: CFGR1 locks after the first write — CPUSW and SYSSW must
  *   be written together in a single putreg32().  CFGR2 (bus prescalers)
@@ -385,6 +407,26 @@ void stm32_stdclockconfig(void)
         }
     }
 
+  /* 1b. SMPS overdrive + VOS SCALE0 for 800 MHz CPU operation.
+   *     GPIOB clock is not yet enabled (rcc_enableahb4 runs later),
+   *     so enable it here for PB12 access.
+   */
+
+  putreg32(RCC_AHB4ENR_GPIOBEN, STM32_RCC_AHB4ENSR);
+  modifyreg32(GPIOB_BASE_S + 0x00, (3 << 24), (1 << 24));  /* MODER: output */
+  modifyreg32(GPIOB_BASE_S + 0x08, (3 << 24), (3 << 24));  /* OSPEEDR: VH */
+  putreg32((1 << 12), GPIOB_BASE_S + 0x18);                 /* BSRR: set */
+
+  modifyreg32(PWR_VOSCR, 0, PWR_VOSCR_VOS);
+
+  for (timeout = VOS_TIMEOUT; timeout > 0; timeout--)
+    {
+      if ((getreg32(PWR_VOSCR) & PWR_VOSCR_RDY) != 0)
+        {
+          break;
+        }
+    }
+
   /* 2. Disable PLL1 via the Control Clear Register (atomic) */
 
   putreg32(RCC_CR_PLL1ON, STM32_RCC_CCR);
@@ -397,14 +439,14 @@ void stm32_stdclockconfig(void)
         }
     }
 
-  /* 3. Configure PLL1CFGR1: source=HSI, M=4, N=75
-   *    VCO_in  = 64 MHz / 4 = 16 MHz
-   *    VCO_out = 16 MHz * 75 = 1200 MHz
+  /* 3. Configure PLL1CFGR1: source=HSI, M=2, N=25
+   *    VCO_in  = 64 MHz / 2 = 32 MHz
+   *    VCO_out = 32 MHz * 25 = 800 MHz
    */
 
   regval = (RCC_PLL1CFGR1_SEL_HSI)
-         | (4 << RCC_PLL1CFGR1_DIVM_SHIFT)
-         | (75 << RCC_PLL1CFGR1_DIVN_SHIFT);
+         | (2 << RCC_PLL1CFGR1_DIVM_SHIFT)
+         | (25 << RCC_PLL1CFGR1_DIVN_SHIFT);
   putreg32(regval, STM32_RCC_PLL1CFGR1);
 
   /* 4. Configure PLL1CFGR3: disable SS, PDIV1=1, PDIV2=1, enable post-div */
@@ -428,23 +470,23 @@ void stm32_stdclockconfig(void)
     }
 
   /* 6. Configure IC dividers (source=PLL1, register value = divider - 1)
-   *    IC1  = PLL1 / 2  = 600 MHz  (CPU)
-   *    IC2  = PLL1 / 3  = 400 MHz  (SYSCLK)
-   *    IC3  = PLL1 / 6  = 200 MHz  (XSPI2 kernel clock)
-   *    IC6  = PLL1 / 4  = 300 MHz  (AHB — will be re-sourced if NPU)
-   *    IC11 = PLL1 / 3  = 400 MHz  (APB — will be re-sourced if NPU)
+   *    IC1  = PLL1 / 1  = 800 MHz  (CPU)
+   *    IC2  = PLL1 / 2  = 400 MHz  (SYSCLK)
+   *    IC3  = PLL1 / 4  = 200 MHz  (XSPI2 kernel clock)
+   *    IC6  = PLL1 / 3  = 267 MHz  (AHB — will be re-sourced if NPU)
+   *    IC11 = PLL1 / 2  = 400 MHz  (APB — will be re-sourced if NPU)
    */
 
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (0 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC1CFGR);   /* IC1: 800/1 = 800 MHz */
   putreg32(RCC_ICCFGR_SEL_PLL1 | (1 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC1CFGR);   /* IC1: 1200/2 = 600 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (2 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC2CFGR);   /* IC2: 1200/3 = 400 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (5 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC3CFGR);   /* IC3: 1200/6 = 200 MHz */
+           STM32_RCC_IC2CFGR);   /* IC2: 800/2 = 400 MHz */
   putreg32(RCC_ICCFGR_SEL_PLL1 | (3 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC6CFGR);   /* IC6: 1200/4 = 300 MHz */
+           STM32_RCC_IC3CFGR);   /* IC3: 800/4 = 200 MHz */
   putreg32(RCC_ICCFGR_SEL_PLL1 | (2 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC11CFGR);  /* IC11: 1200/3 = 400 MHz */
+           STM32_RCC_IC6CFGR);   /* IC6: 800/3 = 267 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1 | (1 << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC11CFGR);  /* IC11: 800/2 = 400 MHz */
 
   /* 7. Enable IC1, IC2, IC3, IC6, IC11 */
 
@@ -453,8 +495,8 @@ void stm32_stdclockconfig(void)
            STM32_RCC_DIVENSR);
 
   /* 8. Set bus prescalers BEFORE the CFGR1 switch — CFGR2 locks after
-   *    CFGR1 is written.  HPRE = /2 gives HCLK = IC6/2 = 150 MHz.
-   *    PPRE1 = /1, PPRE2 = /1 → PCLK1 = PCLK2 = HCLK = 150 MHz.
+   *    CFGR1 is written.  HPRE = /2 gives HCLK = SYSCLK/2 = 200 MHz.
+   *    PPRE1 = /1, PPRE2 = /1 → PCLK1 = PCLK2 = HCLK = 200 MHz.
    */
 
   putreg32(RCC_CFGR2_HPRE_SYSCLKd2, STM32_RCC_CFGR2);
