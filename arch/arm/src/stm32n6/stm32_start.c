@@ -228,6 +228,26 @@ static inline void stm32_enable_lob(void)
  * Public Functions
  ****************************************************************************/
 
+/****************************************************************************
+ * Name: __wrap___start
+ *
+ * Description:
+ *   Linker --wrap intercept for __start.  Clears MSPLIM/PSPLIM stack
+ *   limits set by the STM32N6 boot ROM (DEV mode), then falls through
+ *   to the real __start.  Must be naked to avoid a prologue that could
+ *   fault against the boot ROM's stack limits.
+ *
+ ****************************************************************************/
+
+void __wrap___start(void) __attribute__((naked));
+void __wrap___start(void)
+{
+  __asm__ volatile ("mov r0, #0\n\t"
+                    "msr msplim, r0\n\t"
+                    "msr psplim, r0\n\t"
+                    "b __real___start\n\t");
+}
+
 #ifdef CONFIG_ARMV8M_STACKCHECK
 /* we need to get r10 set before we can allow instrumentation calls */
 
@@ -246,15 +266,6 @@ void __start(void)
 {
   const uint32_t *src;
   uint32_t *dest;
-
-  /* Clear MSPLIM/PSPLIM stack limits that may have been set by the boot ROM
-   * (DEV boot mode).  Must happen before any stack-heavy function call to
-   * avoid an immediate STKOF fault.
-   */
-
-  __asm__ volatile ("mov r0, #0\n\t"
-                    "msr msplim, r0\n\t"
-                    "msr psplim, r0\n\t" ::: "r0");
 
   /* Set VTOR to point to our vector table.  In DEV boot mode the boot ROM
    * leaves VTOR pointing at 0x18000000 (ROM).  We must fix this before

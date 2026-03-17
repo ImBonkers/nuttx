@@ -273,7 +273,6 @@ int stm32_xspi_setup(void)
   ret = nx_mount("/dev/mtdblock3", "/mnt", "littlefs", 0, NULL);
   if (ret < 0)
     {
-      fwarn("littlefs mount failed (%d), formatting...\n", ret);
       ret = nx_mount("/dev/mtdblock3", "/mnt", "littlefs", 0,
                      "forceformat");
       if (ret < 0)

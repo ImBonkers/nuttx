@@ -29,6 +29,11 @@ HEAD_ASRC =
 
 include armv8-m/Make.defs
 
+# Wrap __start so stm32_start.c can clear MSPLIM/PSPLIM (boot ROM
+# sets stack limits that fault before __start's C prologue runs).
+
+LDFLAGS += --wrap=__start
+
 # Required STM32N6 files
 
 CHIP_CSRCS += stm32_gpio.c stm32_irq.c stm32_lowputc.c stm32_rcc.c
