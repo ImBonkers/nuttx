@@ -350,7 +350,7 @@ int stm32_bringup(void)
           }
       }
 
-    syslog(LOG_INFO, "NPU: %d/%d blocks alive\n", pass, total);
+    syslog(LOG_DEBUG, "NPU: %d/%d blocks alive\n", pass, total);
 
     /* SMPS overdrive (PB12 HIGH) is now done early in
      * stm32_configure_pll2_pll3() before PLL2/PLL3 are enabled.
@@ -486,7 +486,7 @@ int stm32_bringup(void)
         }
       else
         {
-          syslog(LOG_INFO, "NPU STRENG memcpy: %d bytes PASS\n",
+          syslog(LOG_DEBUG, "NPU STRENG memcpy: %d bytes PASS\n",
                  NPU_MCPY_BYTES);
         }
 
