@@ -400,12 +400,14 @@ int mx25rxx_read_byte(FAR struct mx25rxx_dev_s *dev, FAR uint8_t *buffer,
 #ifdef CONFIG_ARCH_CHIP_STM32N6
   if (dev->addrlen == 4)
     {
-      /* MX25UM: use standard SPI read with 4-byte address, 8 dummy cycles */
+      /* MX25UM51245G: use dedicated 4-byte Fast Read command (0x0C).
+       * Do not rely on EN4B — use the explicit 4-byte address command.
+       */
 
       meminfo.flags   = QSPIMEM_READ;
       meminfo.addrlen = 4;
       meminfo.dummies = 8;
-      meminfo.cmd     = MX25R_FAST_READ;
+      meminfo.cmd     = 0x0c;
     }
   else
 #endif
@@ -446,10 +448,13 @@ int mx25rxx_write_page(FAR struct mx25rxx_dev_s *priv,
 #ifdef CONFIG_ARCH_CHIP_STM32N6
   if (priv->addrlen == 4)
     {
-      /* MX25UM: standard SPI page program with 4-byte address */
+      /* MX25UM51245G: use dedicated 4-byte Page Program command (0x12).
+       * The standard PP (0x02) expects 3-byte address even after EN4B
+       * on this flash part — only 0x12 reliably accepts 4 address bytes.
+       */
 
       meminfo.flags   = QSPIMEM_WRITE;
-      meminfo.cmd     = MX25R_PP;
+      meminfo.cmd     = 0x12;
       meminfo.addrlen = 4;
     }
   else
@@ -520,7 +525,11 @@ int mx25rxx_erase_sector(FAR struct mx25rxx_dev_s *priv, off_t sector)
 
   mx25rxx_write_enable(priv, true);
 #ifdef CONFIG_ARCH_CHIP_STM32N6
-  mx25rxx_command_address(priv->qspi, MX25R_SE, address, priv->addrlen);
+  /* MX25UM51245G: use 4-byte Sector Erase command (0x21).
+   * Standard SE (0x20) expects 3-byte address on this part.
+   */
+
+  mx25rxx_command_address(priv->qspi, 0x21, address, priv->addrlen);
 #else
   mx25rxx_command_address(priv->qspi, MX25R_SE, address, 3);
 #endif

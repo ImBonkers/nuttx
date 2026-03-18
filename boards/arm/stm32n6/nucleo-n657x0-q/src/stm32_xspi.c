@@ -310,26 +310,27 @@ int stm32_xspi_setup(void)
 #endif /* CONFIG_FS_LITTLEFS */
 #endif /* CONFIG_MTD_PARTITION */
 
-  /* Enter memory-mapped mode for NPU weight access at 0x70000000+.
-   * Uses SPI 1-1-1 Fast Read (0x0B) with 8 dummy cycles, matching
-   * the FSBL configuration.  The XSPI driver will auto-suspend mmap
-   * mode during MTD operations and re-enter after each completes.
+  /* Memory-mapped mode disabled for now — MTD writes fail when mmap
+   * toggle is active.  NPU weight access requires a different approach
+   * (e.g., pre-load weights to SRAM before entering mmap).
    */
 
+#if 0
   {
     struct qspi_meminfo_s mmap_meminfo;
 
-    mmap_meminfo.flags   = QSPIMEM_READ;  /* SPI 1-1-1 read */
-    mmap_meminfo.addrlen = 4;      /* 32-bit address (MTD enables 4-byte mode) */
-    mmap_meminfo.dummies = 8;      /* 8 dummy cycles for Fast Read */
-    mmap_meminfo.cmd     = 0x0c;   /* Fast Read 4-byte address command */
+    mmap_meminfo.flags   = QSPIMEM_READ;
+    mmap_meminfo.addrlen = 4;
+    mmap_meminfo.dummies = 8;
+    mmap_meminfo.cmd     = 0x0c;
     mmap_meminfo.addr    = 0;
     mmap_meminfo.buflen  = 0;
     mmap_meminfo.buffer  = NULL;
 
     stm32_xspi_enter_memorymapped(qspi, &mmap_meminfo, 0);
-    finfo("XSPI2 memory-mapped mode enabled (Fast Read 0x0B)\n");
+    finfo("XSPI2 memory-mapped mode enabled\n");
   }
+#endif
 
   return OK;
 }

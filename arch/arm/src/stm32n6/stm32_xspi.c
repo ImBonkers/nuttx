@@ -101,7 +101,7 @@
 #    define CONFIG_STM32N6_XSPI_DMATHRESHOLD 4
 #  endif
 #  define XSPI_DMA_THRESHOLD  CONFIG_STM32N6_XSPI_DMATHRESHOLD
-#  define XSPI_DMA_BUFSIZE    256
+#  define XSPI_DMA_BUFSIZE    4096
 #endif
 
 /****************************************************************************
@@ -523,7 +523,7 @@ static void xspi_ccrconfig(struct stm32_xspidev_s *priv,
       xspi_putreg(priv, xctn->altbytes, STM32_XSPI_ABR_OFFSET);
     }
 
-  /* Build and write CCR */
+  /* Build CCR value */
 
   regval = XSPI_CCR_IMODE(xctn->instrmode) |
            XSPI_CCR_ADMODE(xctn->addrmode) |
@@ -534,7 +534,15 @@ static void xspi_ccrconfig(struct stm32_xspidev_s *priv,
            (xctn->isddr ? XSPI_CCR_DDTR : 0) |
            (xctn->isddr ? XSPI_CCR_ABDTR : 0) |
            (xctn->isddr ? XSPI_CCR_ADDTR : 0);
+
+  /* Write both CCR and WCCR with the same configuration.
+   * The STM32N6 XSPI uses WCCR/WTCR/WIR for write operations
+   * (FMODE=00 indirect write), while CCR/TCR/IR are used for reads.
+   * Both register sets must be configured consistently.
+   */
+
   xspi_putreg(priv, regval, STM32_XSPI_CCR_OFFSET);
+  xspi_putreg(priv, regval, STM32_XSPI_WCCR_OFFSET);
 
   /* Set functional mode */
 
@@ -542,20 +550,30 @@ static void xspi_ccrconfig(struct stm32_xspidev_s *priv,
   regval = (regval & ~(XSPI_CR_FMODE_MASK)) | XSPI_CR_FMODE(fctn);
   xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
 
-  /* Set dummy cycles */
+  /* Set dummy cycles in both TCR and WTCR */
 
   regval = xspi_getreg(priv, STM32_XSPI_TCR_OFFSET);
   regval = (regval & ~(XSPI_TCR_DCYC_MASK)) |
            XSPI_TCR_DCYC(xctn->dummycycles);
   xspi_putreg(priv, regval, STM32_XSPI_TCR_OFFSET);
+  xspi_putreg(priv, regval, STM32_XSPI_WTCR_OFFSET);
 
-  /* Write instruction register */
+  /* Write instruction to both IR and WIR */
 
   xspi_putreg(priv, xctn->instr, STM32_XSPI_IR_OFFSET);
+  xspi_putreg(priv, xctn->instr, STM32_XSPI_WIR_OFFSET);
 
-  /* If we have and need an address, set it */
+  /* If we have and need an address, set it.
+   *
+   * For indirect-read mode, writing AR triggers the transfer.
+   * Both xspi_receive_blocking() and xspi_receive_dma() re-write AR
+   * to start the transfer after their own setup is complete, so we
+   * must NOT write AR here for INDRD — it would double-trigger.
+   */
 
-  if (CCR_ADMODE_NONE != xctn->addrmode && XSPI_FMODE_MEMMAP != fctn)
+  if (CCR_ADMODE_NONE != xctn->addrmode &&
+      XSPI_FMODE_MEMMAP != fctn &&
+      XSPI_FMODE_INDRD != fctn)
     {
       xspi_putreg(priv, xctn->addr, STM32_XSPI_AR_OFFSET);
     }
@@ -723,9 +741,7 @@ static int xspi_receive_blocking(struct stm32_xspidev_s *priv,
   volatile uint32_t *datareg =
     (volatile uint32_t *)(priv->base + STM32_XSPI_DR_OFFSET);
   uint8_t *dest = (uint8_t *)xctn->buffer;
-  uint32_t addrval;
 
-  addrval = xspi_getreg(priv, STM32_XSPI_AR_OFFSET);
   if (dest != NULL)
     {
       uint32_t remaining = xctn->datasize;
@@ -737,11 +753,14 @@ static int xspi_receive_blocking(struct stm32_xspidev_s *priv,
       regval |= XSPI_CR_FMODE(XSPI_FMODE_INDRD);
       xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
 
-      /* Start the transfer by re-writing the address or instruction */
+      /* Start the transfer by writing the address or instruction.
+       * For INDRD, writing AR triggers the XSPI to begin clocking
+       * data from the flash into the FIFO.
+       */
 
       if (xctn->addrmode != CCR_ADMODE_NONE)
         {
-          xspi_putreg(priv, addrval, STM32_XSPI_AR_OFFSET);
+          xspi_putreg(priv, xctn->addr, STM32_XSPI_AR_OFFSET);
         }
       else
         {
@@ -837,7 +856,6 @@ static int xspi_receive_dma(struct stm32_xspidev_s *priv,
 {
   struct stm32_gpdma_cfg_s rxcfg;
   uint32_t regval;
-  uint32_t addrval;
   size_t nbytes = xctn->datasize;
   size_t nbytes_aligned;
   int ret;
@@ -878,12 +896,11 @@ static int xspi_receive_dma(struct stm32_xspidev_s *priv,
   regval |= XSPI_CR_FMODE(XSPI_FMODE_INDRD);
   xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
 
-  /* Re-write the address to start the transfer */
+  /* Write the address to start the transfer */
 
   if (xctn->addrmode != CCR_ADMODE_NONE)
     {
-      addrval = xspi_getreg(priv, STM32_XSPI_AR_OFFSET);
-      xspi_putreg(priv, addrval, STM32_XSPI_AR_OFFSET);
+      xspi_putreg(priv, xctn->addr, STM32_XSPI_AR_OFFSET);
     }
   else
     {
@@ -1362,13 +1379,12 @@ static int xspi_memory(struct qspi_dev_s *dev,
   else
     {
       uint32_t regval;
-      uint32_t addrval;
-
-      addrval = xspi_getreg(priv, STM32_XSPI_AR_OFFSET);
 
       xspi_ccrconfig(priv, &xctn, XSPI_FMODE_INDRD);
 
-      xspi_putreg(priv, addrval, STM32_XSPI_AR_OFFSET);
+      /* Write address to trigger the indirect read transfer */
+
+      xspi_putreg(priv, xctn.addr, STM32_XSPI_AR_OFFSET);
 
       regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
       regval |= (XSPI_CR_TEIE | XSPI_CR_FTIE | XSPI_CR_TCIE);
@@ -1621,6 +1637,19 @@ static int xspi_hw_initialize(struct stm32_xspidev_s *priv)
   }
 
   xspi_putreg(priv, regval, STM32_XSPI_DCR1_OFFSET);
+
+  /* Clear DCR3: CSBOUND and MAXTRAN left by FSBL can truncate transfers.
+   * CSBOUND causes CS to toggle at 2^CSBOUND byte boundaries — fatal for
+   * Page Program which needs CS held low for the entire 256-byte page.
+   * MAXTRAN limits the maximum bytes per transaction.
+   * Both must be 0 for standard SPI 1-1-1 operation.
+   */
+
+  xspi_putreg(priv, 0, STM32_XSPI_DCR3_OFFSET);
+
+  /* Also clear DCR4 (refresh rate) — not needed for standard SPI */
+
+  xspi_putreg(priv, 0, STM32_XSPI_DCR4_OFFSET);
 
   /* Enable XSPI */
 
