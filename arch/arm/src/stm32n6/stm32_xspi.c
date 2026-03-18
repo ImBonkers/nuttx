@@ -120,6 +120,9 @@ struct stm32_xspidev_s
   bool initialized;             /* TRUE: Controller has been initialized */
   mutex_t lock;                 /* Assures mutually exclusive access */
   bool memmap;                  /* TRUE: Controller is in memory mapped mode */
+  bool mmap_saved;              /* TRUE: mmap config saved for auto-resume */
+  struct qspi_meminfo_s mmap_info;  /* Saved mmap config for resume */
+  uint32_t mmap_lpto;           /* Saved mmap timeout */
 
 #ifdef CONFIG_STM32N6_XSPI_INTERRUPTS
   xcpt_t handler;               /* Interrupt handler */
@@ -1016,9 +1019,55 @@ static int xspi_lock(struct qspi_dev_s *dev, bool lock)
   if (lock)
     {
       ret = nxmutex_lock(&priv->lock);
+
+      /* Suspend memory-mapped mode while indirect ops are in progress.
+       * The MTD driver holds the lock for the entire operation sequence
+       * (write-enable + program + status-poll), so we only suspend once
+       * and resume when the lock is released.
+       */
+
+      if (ret == OK && priv->memmap)
+        {
+          uint32_t regval;
+
+          /* Exit memory-mapped mode: abort + clear FMODE + wait */
+
+          xspi_abort(priv);
+          xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
+          /* Explicitly clear FMODE bits to exit memory-mapped mode.
+           * xspi_abort() alone doesn't clear FMODE on STM32N6.
+           */
+
+          regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+          regval &= ~XSPI_CR_FMODE_MASK;
+          xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+          xspi_putreg(priv,
+                       XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+                       XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+                       STM32_XSPI_FCR_OFFSET);
+          priv->memmap = false;
+        }
     }
   else
     {
+      /* Resume memory-mapped mode before releasing the lock */
+
+      if (priv->mmap_saved && !priv->memmap)
+        {
+          struct xspi_xctnspec_s mxctn;
+          xspi_abort(priv);
+          xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+          xspi_putreg(priv,
+                       XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+                       XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+                       STM32_XSPI_FCR_OFFSET);
+          xspi_setupxctnfrommem(&mxctn, &priv->mmap_info);
+          xspi_ccrconfig(priv, &mxctn, XSPI_FMODE_MEMMAP);
+          priv->memmap = true;
+        }
+
       ret = nxmutex_unlock(&priv->lock);
     }
 
@@ -1139,10 +1188,9 @@ static int xspi_command(struct qspi_dev_s *dev,
   struct xspi_xctnspec_s xctn;
   int ret;
 
-  if (priv->memmap)
-    {
-      return -EBUSY;
-    }
+  /* Memory-mapped mode is suspended by xspi_lock() on entry */
+
+  DEBUGASSERT(!priv->memmap);
 
   ret = xspi_setupxctnfromcmd(&xctn, cmdinfo);
   if (OK != ret)
@@ -1278,10 +1326,9 @@ static int xspi_memory(struct qspi_dev_s *dev,
   struct xspi_xctnspec_s xctn;
   int ret;
 
-  if (priv->memmap)
-    {
-      return -EBUSY;
-    }
+  /* Memory-mapped mode is suspended by xspi_lock() on entry */
+
+  DEBUGASSERT(!priv->memmap);
 
   ret = xspi_setupxctnfrommem(&xctn, meminfo);
   if (OK != ret)
@@ -1783,6 +1830,12 @@ void stm32_xspi_enter_memorymapped(struct qspi_dev_s *dev,
 
   xspi_ccrconfig(priv, &xctn, XSPI_FMODE_MEMMAP);
   priv->memmap = true;
+
+  /* Save mmap config so we can re-enter after MTD operations */
+
+  memcpy(&priv->mmap_info, meminfo, sizeof(priv->mmap_info));
+  priv->mmap_lpto = lpto;
+  priv->mmap_saved = true;
 
   xspi_lock(dev, false);
 }

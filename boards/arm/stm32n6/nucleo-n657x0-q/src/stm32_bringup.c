@@ -615,12 +615,10 @@ int stm32_bringup(void)
 
 #endif
 
-#if defined(CONFIG_STM32N6_XSPI2) && !defined(CONFIG_STM32N6_NPU)
-  /* Initialize XSPI2 and register external flash.
-   * Skip when NPU is enabled — the FSBL leaves XSPI2 in memory-mapped
-   * mode so the NPU can read weights from 0x71000000.  Initializing the
-   * MTD driver switches XSPI2 to command mode, breaking NPU weight access.
-   * TODO: add mutex-protected mode toggle so both can coexist.
+#ifdef CONFIG_STM32N6_XSPI2
+  /* Initialize XSPI2, register MTD partitions, then re-enter memory-mapped
+   * mode for NPU weight access.  The XSPI driver auto-suspends mmap mode
+   * during MTD operations and re-enters after each completes.
    */
 
   ret = stm32_xspi_setup();
