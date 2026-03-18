@@ -222,14 +222,6 @@ int stm32_bringup(void)
 {
   int ret;
 
-  /* Dump clock register state so we can verify PLL/IC configuration */
-
-  syslog(LOG_INFO, "RCC SR=0x%08lx CFGR1=0x%08lx\n",
-         getreg32(STM32_RCC_SR), getreg32(STM32_RCC_CFGR1));
-  syslog(LOG_INFO, "IC1=0x%08lx IC2=0x%08lx IC6=0x%08lx IC11=0x%08lx\n",
-         getreg32(STM32_RCC_IC1CFGR), getreg32(STM32_RCC_IC2CFGR),
-         getreg32(STM32_RCC_IC6CFGR), getreg32(STM32_RCC_IC11CFGR));
-
 #ifdef CONFIG_STM32N6_NPU
   /* NPU full init: power on SRAM, configure RIFSC, init ATON fabric
    * (clock gates, bus interfaces, interrupt controller), enable CACHEAXI,
@@ -238,28 +230,27 @@ int stm32_bringup(void)
    */
 
   {
-    /* Table of ATON IP blocks: offset from NPU_BASE, instance count, name */
+    /* Table of ATON IP blocks: offset from NPU_BASE, instance count */
 
     static const struct
     {
-      uint32_t    off;
-      uint8_t     cnt;
-      const char *name;
+      uint32_t off;
+      uint8_t  cnt;
     } npu_blocks[] =
     {
-      { 0x00000,  1, "CLKCTRL"   },
-      { 0x01000,  1, "INTCTRL"   },
-      { 0x02000,  2, "BUSIF"     },
-      { 0x04000,  1, "STRSWITCH" },
-      { 0x05000, 10, "STRENG"    },
-      { 0x0f000,  4, "CONVACC"   },
-      { 0x13000,  2, "DECUN"     },
-      { 0x15000,  2, "ACTIV"     },
-      { 0x17000,  4, "ARITH"     },
-      { 0x1b000,  2, "POOL"      },
-      { 0x1d000,  1, "RECBUF"    },
-      { 0x1e000,  1, "EPOCHCTRL" },
-      { 0x1f000,  1, "DBG_TRACE" },
+      { 0x00000,  1 },  /* CLKCTRL */
+      { 0x01000,  1 },  /* INTCTRL */
+      { 0x02000,  2 },  /* BUSIF */
+      { 0x04000,  1 },  /* STRSWITCH */
+      { 0x05000, 10 },  /* STRENG */
+      { 0x0f000,  4 },  /* CONVACC */
+      { 0x13000,  2 },  /* DECUN */
+      { 0x15000,  2 },  /* ACTIV */
+      { 0x17000,  4 },  /* ARITH */
+      { 0x1b000,  2 },  /* POOL */
+      { 0x1d000,  1 },  /* RECBUF */
+      { 0x1e000,  1 },  /* EPOCHCTRL */
+      { 0x1f000,  1 },  /* DBG_TRACE */
     };
 
     const int nblocks = sizeof(npu_blocks) / sizeof(npu_blocks[0]);
@@ -343,7 +334,7 @@ int stm32_bringup(void)
 
     putreg32(0x01 | 0x3f0f0000, STM32_CACHEAXI_BASE + 0x0);  /* CR1.EN + all monitors */
 
-    /* Step 5: Scan all IP blocks — read VERSION register from each */
+    /* Step 5: Scan all IP blocks — verify VERSION registers are non-zero */
 
     for (i = 0; i < nblocks; i++)
       {
@@ -351,20 +342,15 @@ int stm32_bringup(void)
           {
             uint32_t addr = STM32_NPU_BASE + npu_blocks[i].off
                             + 0x1000 * j + 0x4;
-            uint32_t ver  = getreg32(addr);
             total++;
-            if (ver != 0)
+            if (getreg32(addr) != 0)
               {
                 pass++;
               }
-
-            syslog(LOG_INFO, "NPU %-10s[%d] VER=0x%08lx\n",
-                   npu_blocks[i].name, j, (unsigned long)ver);
           }
       }
 
-    syslog(LOG_INFO, "NPU scan: %d/%d blocks alive, CACHEAXI EN\n",
-           pass, total);
+    syslog(LOG_INFO, "NPU: %d/%d blocks alive\n", pass, total);
 
     /* SMPS overdrive (PB12 HIGH) is now done early in
      * stm32_configure_pll2_pll3() before PLL2/PLL3 are enabled.
@@ -387,33 +373,6 @@ int stm32_bringup(void)
       int timeout;
       uint8_t *src = (uint8_t *)NPU_SRC_ADDR;
       uint8_t *dst = (uint8_t *)NPU_DST_ADDR;
-
-      /* Dump key RISAF/RIMC state to see what ai_fsbl configured */
-
-      syslog(LOG_INFO, "RISAF2[0x54027000] CR=0x%08lx "
-             "REG0=0x%08lx/0x%08lx/0x%08lx/0x%08lx\n",
-             (unsigned long)getreg32(0x54027000),
-             (unsigned long)getreg32(0x54027040),
-             (unsigned long)getreg32(0x54027044),
-             (unsigned long)getreg32(0x54027048),
-             (unsigned long)getreg32(0x5402704c));
-      syslog(LOG_INFO, "RISAF4[0x54029000] CR=0x%08lx "
-             "REG0=0x%08lx/0x%08lx/0x%08lx/0x%08lx\n",
-             (unsigned long)getreg32(0x54029000),
-             (unsigned long)getreg32(0x54029040),
-             (unsigned long)getreg32(0x54029044),
-             (unsigned long)getreg32(0x54029048),
-             (unsigned long)getreg32(0x5402904c));
-      syslog(LOG_INFO, "RISAF5[0x5402a000] CR=0x%08lx "
-             "REG0=0x%08lx/0x%08lx/0x%08lx/0x%08lx\n",
-             (unsigned long)getreg32(0x5402a000),
-             (unsigned long)getreg32(0x5402a040),
-             (unsigned long)getreg32(0x5402a044),
-             (unsigned long)getreg32(0x5402a048),
-             (unsigned long)getreg32(0x5402a04c));
-      syslog(LOG_INFO, "RIMC1=0x%08lx CACHEAXI_CR1=0x%08lx\n",
-             (unsigned long)getreg32(0x54024c14),
-             (unsigned long)getreg32(STM32_CACHEAXI_BASE));
 
       /* Fill src with pattern, dst with 0xAA */
 
@@ -511,16 +470,6 @@ int stm32_bringup(void)
       up_invalidate_dcache((uintptr_t)dst,
                            (uintptr_t)dst + NPU_MCPY_BYTES);
 
-      syslog(LOG_INFO, "NPU SE0 CTRL=0x%08lx IRQ=0x%08lx "
-             "SE1 CTRL=0x%08lx IRQ=0x%08lx\n",
-             (unsigned long)getreg32(se0 + STRENG_CTRL),
-             (unsigned long)getreg32(se0 + STRENG_IRQ),
-             (unsigned long)getreg32(se1 + STRENG_CTRL),
-             (unsigned long)getreg32(se1 + STRENG_IRQ));
-      syslog(LOG_INFO, "NPU BUSIF0 ERR=0x%08lx BUSIF1 ERR=0x%08lx\n",
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x2010),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x3010));
-
       if (timeout <= 0)
         {
           syslog(LOG_ERR, "NPU STRENG memcpy: TIMEOUT "
@@ -544,259 +493,6 @@ int stm32_bringup(void)
     }
   }
 #endif  /* CONFIG_STM32N6_NPU */
-
-#if 0  /* Old NPU test code — removed */
-      {
-        uint32_t voscr = getreg32(STM32_PWR_BASE + 0x020);
-        syslog(LOG_INFO, "PWR VOSCR=0x%08lx CR1=0x%08lx\n",
-               (unsigned long)voscr,
-               (unsigned long)getreg32(STM32_PWR_BASE + 0x000));
-        if (!(voscr & 1))
-          {
-            modifyreg32(STM32_PWR_BASE + 0x020, 0, 1);  /* VOS=1 (SCALE0) */
-            int vtimeout = 100000;
-            while (!(getreg32(STM32_PWR_BASE + 0x020) & 2) && --vtimeout > 0);
-            syslog(LOG_INFO, "VOS→SCALE0: VOSCR=0x%08lx (timeout=%d)\n",
-                   (unsigned long)getreg32(STM32_PWR_BASE + 0x020), vtimeout);
-          }
-      }
-      busenr = getreg32(STM32_RCC_BASE + 0x0244);  /* BUSENR */
-
-      /* Enable ALL bus and peripheral LPEN clocks (x-cube pattern).
-       * Ensures no clocks get gated during brief WFI in syslog path.
-       */
-
-      putreg32(0xffffffff, STM32_RCC_BASE + 0x0a84);  /* BUSLPENSR */
-      putreg32(0xffffffff, STM32_RCC_BASE + 0x0a8c);  /* MEMLPENSR */
-      putreg32(0xffffffff, STM32_RCC_BASE + 0x0a90);  /* AHB1LPENSR */
-      putreg32(0xffffffff, STM32_RCC_BASE + 0x0a94);  /* AHB2LPENSR */
-      putreg32(0xffffffff, STM32_RCC_BASE + 0x0a98);  /* AHB3LPENSR */
-      putreg32(0xffffffff, STM32_RCC_BASE + 0x0a9c);  /* AHB4LPENSR */
-      putreg32(0xffffffff, STM32_RCC_BASE + 0x0aa0);  /* AHB5LPENSR */
-
-      /* Fill SRAM2 dst with 0xAA pattern and flush to SRAM */
-
-      memset((void *)NPU_DST_ADDR, 0xaa, NPU_MCPY_BYTES);
-      up_clean_dcache((uintptr_t)NPU_DST_ADDR,
-                      (uintptr_t)NPU_DST_ADDR + NPU_MCPY_BYTES);
-      up_invalidate_dcache((uintptr_t)NPU_DST_ADDR,
-                           (uintptr_t)NPU_DST_ADDR + NPU_MCPY_BYTES);
-
-      /* Test A: NOBLK read — SE0 reads, STRSWITCH routes to SE1.
-       * Need STRSWITCH active or STRENG stalls on stream handshake.
-       */
-
-      /* Reset STRSWITCH first */
-
-      putreg32(STRSWITCH_CTRL_CLR, strswitch + STRSWITCH_CTRL);
-      timeout = 10000;
-      while ((getreg32(strswitch + STRSWITCH_CTRL) & STRSWITCH_CTRL_CLR)
-             && --timeout > 0);
-      putreg32(STRSWITCH_CTRL_CONFCLR, strswitch + STRSWITCH_CTRL);
-      timeout = 10000;
-      while ((getreg32(strswitch + STRSWITCH_CTRL) & STRSWITCH_CTRL_CONFCLR)
-             && --timeout > 0);
-
-      /* Enable STRSWITCH and route SE0→SE1 */
-
-      putreg32(STRSWITCH_CTRL_EN, strswitch + STRSWITCH_CTRL);
-      putreg32(0x01, strswitch + STRSWITCH_DST(1));
-
-      putreg32(STRENG_CTRL_CLR, se0 + STRENG_CTRL);
-      timeout = 10000;
-      while ((getreg32(se0 + STRENG_CTRL) & STRENG_CTRL_CLR)
-             && --timeout > 0);
-
-      putreg32(0xff, se0 + STRENG_IRQ);
-      putreg32((uintptr_t)g_npu_src, se0 + STRENG_ADDR);
-      putreg32(NPU_MCPY_ELEMENTS, se0 + STRENG_FSIZE);
-      putreg32(0, se0 + STRENG_STRD);
-      putreg32(NPU_MCPY_BYTES, se0 + STRENG_FOFFSET);
-      putreg32(0, se0 + STRENG_FRAME_RPT);
-      putreg32(0, se0 + STRENG_FRPTOFF);
-      putreg32(0x00000024, se0 + STRENG_POS);
-      putreg32(0x04, se0 + STRENG_LIMITEN);
-      putreg32(1, se0 + STRENG_LIMIT);
-      putreg32(0x19, se0 + STRENG_CID_CACHE);  /* CID=1, CACHEABLE=1, ALLOC=1 */
-
-      ctrl = STRENG_CTRL_SINGLE | STRENG_CTRL_RAW | STRENG_CTRL_NOBLK
-             | STRENG_CTRL_SIZE_8BIT;
-      putreg32(ctrl, se0 + STRENG_CTRL);
-
-      syslog(LOG_INFO, "BUSIF0: %08lx/%08lx/%08lx/%08lx  "
-             "BUSIF1: %08lx/%08lx/%08lx/%08lx\n",
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x2000),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x2004),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x2008),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x200c),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x3000),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x3004),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x3008),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x300c));
-      /* Configure RISAF1 (0x54026000) to allow NPU (CID=1) access
-       * to XSPI2 external flash memory space.
-       */
-
-#define RISAF1_BASE  0x54026000
-
-      putreg32(0x00030003, RISAF1_BASE + 0x4c); /* CIDCFGR: RD+WR CID0+1 */
-      putreg32(0x00000000, RISAF1_BASE + 0x44); /* STARTR: 0 */
-      putreg32(0x03ffffff, RISAF1_BASE + 0x48); /* ENDR: 64MB-1 */
-      putreg32(0x00000101, RISAF1_BASE + 0x40); /* CFGR: BREN=1, SEC=1 */
-
-      syslog(LOG_INFO, "RISAF1 CFGR=0x%08lx CIDCFGR=0x%08lx\n",
-             (unsigned long)getreg32(RISAF1_BASE + 0x40),
-             (unsigned long)getreg32(RISAF1_BASE + 0x4c));
-
-      /* Pre-fill CACHEAXI cache by forcing CPU reads through AXI.
-       * Invalidate CPU D-cache for the flash range first, then read.
-       * This generates AXI reads that populate CACHEAXI.
-       */
-
-      up_invalidate_dcache(NPU_SRC_ADDR, NPU_SRC_ADDR + 4096);
-
-      {
-        volatile uint32_t *p = (volatile uint32_t *)NPU_SRC_ADDR;
-        volatile uint32_t dummy;
-        int k;
-        for (k = 0; k < 256; k++)  /* Read 1KB to fill CACHEAXI lines */
-          {
-            dummy = p[k];
-          }
-
-        (void)dummy;
-      }
-
-      /* Reset CACHEAXI monitors */
-
-      modifyreg32(STM32_CACHEAXI_BASE + 0x00, 0,
-                  (1 << 18) | (1 << 19) | (1 << 22) | (1 << 23));
-
-      syslog(LOG_INFO, "NOBLK test: SE0 CTRL=0x%08lx ADDR=0x%08lx\n",
-             (unsigned long)getreg32(se0 + STRENG_CTRL),
-             (unsigned long)getreg32(se0 + STRENG_ADDR));
-
-      /* Enable SE0 — no STRSWITCH needed for NOBLK */
-
-      ctrl = getreg32(se0 + STRENG_CTRL);
-      putreg32(ctrl | STRENG_CTRL_EN, se0 + STRENG_CTRL);
-
-      /* Brief spin then check state */
-
-      for (timeout = 0; timeout < 100000; timeout++)
-        {
-          __asm volatile("nop");
-        }
-
-      syslog(LOG_INFO, "NOBLK done: SE0 CTRL=0x%08lx ADDR=0x%08lx "
-             "IRQ=0x%08lx\n",
-             (unsigned long)getreg32(se0 + STRENG_CTRL),
-             (unsigned long)getreg32(se0 + STRENG_ADDR),
-             (unsigned long)getreg32(se0 + STRENG_IRQ));
-      syslog(LOG_INFO, "BUSIF0_ERR=0x%08lx BUSIF1_ERR=0x%08lx\n",
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x2010),
-             (unsigned long)getreg32(STM32_NPU_BASE + 0x3010));
-      syslog(LOG_INFO, "CACHEAXI: CR1=0x%08lx SR=0x%08lx "
-             "RHMON=%lu RMMON=%lu WHMON=%lu WMMON=%lu\n",
-             (unsigned long)getreg32(STM32_CACHEAXI_BASE + 0x00),
-             (unsigned long)getreg32(STM32_CACHEAXI_BASE + 0x04),
-             (unsigned long)getreg32(STM32_CACHEAXI_BASE + 0x10),
-             (unsigned long)getreg32(STM32_CACHEAXI_BASE + 0x14),
-             (unsigned long)getreg32(STM32_CACHEAXI_BASE + 0x20),
-             (unsigned long)getreg32(STM32_CACHEAXI_BASE + 0x24));
-
-      /* Now do the full memcpy test (SE0→STRSWITCH→SE1) */
-
-      putreg32(STRSWITCH_CTRL_CLR, strswitch + STRSWITCH_CTRL);
-      timeout = 10000;
-      while ((getreg32(strswitch + STRSWITCH_CTRL) & STRSWITCH_CTRL_CLR)
-             && --timeout > 0);
-      putreg32(STRSWITCH_CTRL_CONFCLR, strswitch + STRSWITCH_CTRL);
-      timeout = 10000;
-      while ((getreg32(strswitch + STRSWITCH_CTRL) & STRSWITCH_CTRL_CONFCLR)
-             && --timeout > 0);
-
-      /* CLR both engines */
-
-      putreg32(STRENG_CTRL_CLR, se0 + STRENG_CTRL);
-      timeout = 10000;
-      while ((getreg32(se0 + STRENG_CTRL) & STRENG_CTRL_CLR)
-             && --timeout > 0);
-      putreg32(STRENG_CTRL_CLR, se1 + STRENG_CTRL);
-      timeout = 10000;
-      while ((getreg32(se1 + STRENG_CTRL) & STRENG_CTRL_CLR)
-             && --timeout > 0);
-      putreg32(0xff, se0 + STRENG_IRQ);
-      putreg32(0xff, se1 + STRENG_IRQ);
-
-      /* SE0: input, 8-bit RAW */
-
-      putreg32((uintptr_t)g_npu_src, se0 + STRENG_ADDR);
-      putreg32(NPU_MCPY_ELEMENTS, se0 + STRENG_FSIZE);
-      putreg32(0, se0 + STRENG_STRD);
-      putreg32(NPU_MCPY_BYTES, se0 + STRENG_FOFFSET);
-      putreg32(0, se0 + STRENG_FRAME_RPT);
-      putreg32(0, se0 + STRENG_FRPTOFF);
-      putreg32(0x00000024, se0 + STRENG_POS);
-      putreg32(0x04, se0 + STRENG_LIMITEN);
-      putreg32(1, se0 + STRENG_LIMIT);
-      putreg32(0x19, se0 + STRENG_CID_CACHE);  /* CID=1, CACHEABLE=1, ALLOC=1 */
-      ctrl = STRENG_CTRL_SINGLE | STRENG_CTRL_RAW | STRENG_CTRL_SIZE_8BIT;
-      putreg32(ctrl, se0 + STRENG_CTRL);
-
-      /* SE1: output, 8-bit RAW */
-
-      putreg32((uintptr_t)g_npu_dst, se1 + STRENG_ADDR);
-      putreg32(NPU_MCPY_ELEMENTS, se1 + STRENG_FSIZE);
-      putreg32(0, se1 + STRENG_STRD);
-      putreg32(NPU_MCPY_BYTES, se1 + STRENG_FOFFSET);
-      putreg32(0, se1 + STRENG_FRAME_RPT);
-      putreg32(0, se1 + STRENG_FRPTOFF);
-      putreg32(0x00000024, se1 + STRENG_POS);
-      putreg32(0x04, se1 + STRENG_LIMITEN);
-      putreg32(1, se1 + STRENG_LIMIT);
-      putreg32(0x19, se1 + STRENG_CID_CACHE);  /* CID=1, CACHEABLE=1, ALLOC=1 */
-      ctrl = STRENG_CTRL_SINGLE | STRENG_CTRL_DIR | STRENG_CTRL_RAW
-             | STRENG_CTRL_SIZE_8BIT;
-      putreg32(ctrl, se1 + STRENG_CTRL);
-
-      /* STRSWITCH: enable, then route SE0→SE1 (matches ST order) */
-
-      putreg32(STRSWITCH_CTRL_EN, strswitch + STRSWITCH_CTRL);
-      putreg32(0x01, strswitch + STRSWITCH_DST(1));
-
-      /* Enable SE1 then SE0 */
-
-      ctrl = getreg32(se1 + STRENG_CTRL);
-      putreg32(ctrl | STRENG_CTRL_EN, se1 + STRENG_CTRL);
-      ctrl = getreg32(se0 + STRENG_CTRL);
-      putreg32(ctrl | STRENG_CTRL_EN, se0 + STRENG_CTRL);
-
-      timeout = 100000;
-      while ((getreg32(se1 + STRENG_CTRL) & STRENG_CTRL_RUNNING)
-             && --timeout > 0);
-
-      /* Invalidate CPU D-cache for SRAM2 dst, then check data */
-
-      up_invalidate_dcache((uintptr_t)NPU_DST_ADDR,
-                           (uintptr_t)NPU_DST_ADDR + NPU_MCPY_BYTES);
-
-      {
-        volatile uint8_t *dst = (volatile uint8_t *)NPU_DST_ADDR;
-        volatile uint8_t *src = (volatile uint8_t *)NPU_SRC_ADDR;
-
-        syslog(LOG_INFO, "NPU memcpy: SE0_CTRL=0x%lx SE1_CTRL=0x%lx "
-               "SE0_IRQ=0x%lx SE1_IRQ=0x%lx\n",
-               (unsigned long)getreg32(se0 + STRENG_CTRL),
-               (unsigned long)getreg32(se1 + STRENG_CTRL),
-               (unsigned long)getreg32(se0 + STRENG_IRQ),
-               (unsigned long)getreg32(se1 + STRENG_IRQ));
-        syslog(LOG_INFO, "  src[0..3]=%02x %02x %02x %02x "
-               "dst[0..3]=%02x %02x %02x %02x\n",
-               src[0], src[1], src[2], src[3],
-               dst[0], dst[1], dst[2], dst[3]);
-      }
-#endif  /* old test */
 
   /* Turn on user LEDs: LD6 (green/PG0) and LD7 (blue/PG8) work in DEV mode.
    * LD5 (red/PG10) does not light in DEV mode despite correct GPIO config
