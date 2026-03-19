@@ -103,6 +103,12 @@ ifeq ($(CONFIG_USBHOST),y)
 CHIP_CSRCS += stm32_otghost.c
 endif
 
+ifeq ($(CONFIG_STM32N6_NPU),y)
+CHIP_CSRCS += stm32_npu.c stm32_aton_hw.c stm32_npu_model.c
+CFLAGS += -I$(TOPDIR)$(DELIM)..$(DELIM)npu$(DELIM)model$(DELIM)generated
+CFLAGS += -DCPU_IN_SECURE_STATE
+endif
+
 # Chip-specific RCC
 
 CHIP_CSRCS += stm32n6xx_rcc.c

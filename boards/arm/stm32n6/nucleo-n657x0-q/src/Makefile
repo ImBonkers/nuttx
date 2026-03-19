@@ -55,6 +55,10 @@ ifeq ($(CONFIG_STM32N6_XSPI),y)
 CSRCS += stm32_xspi.c
 endif
 
+ifeq ($(CONFIG_STM32N6_NPU),y)
+CSRCS += stm32_npu.c
+endif
+
 ifeq ($(CONFIG_USBDEV),y)
 CSRCS += stm32_usbdev.c
 endif

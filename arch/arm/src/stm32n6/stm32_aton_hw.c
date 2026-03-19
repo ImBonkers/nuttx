@@ -14,30 +14,15 @@
  * Included Files
  ****************************************************************************/
 
+#include <nuttx/config.h>
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <nuttx/cache.h>
 
+#include "arm_internal.h"
 #include "stm32_aton.h"
 #include "stm32_aton_hw.h"
-
-/****************************************************************************
- * Private Inline Functions
- ****************************************************************************/
-
-/* Direct register access — this file is compiled as app code so we
- * cannot use the kernel's putreg32/getreg32 from arm_internal.h.
- */
-
-static inline void putreg32(uint32_t val, uintptr_t addr)
-{
-  *(volatile uint32_t *)addr = val;
-}
-
-static inline uint32_t getreg32(uintptr_t addr)
-{
-  return *(volatile uint32_t *)addr;
-}
 
 /****************************************************************************
  * Pre-processor Definitions

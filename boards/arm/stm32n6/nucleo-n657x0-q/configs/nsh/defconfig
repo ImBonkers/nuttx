@@ -5,6 +5,7 @@
 # You can then do "make savedefconfig" to generate a new defconfig file that includes your
 # modifications.
 #
+CONFIG_AI_ENGINE=y
 CONFIG_ARCH="arm"
 CONFIG_ARCH_BOARD="nucleo-n657x0-q"
 CONFIG_ARCH_BOARD_NUCLEO_N657X0_Q=y

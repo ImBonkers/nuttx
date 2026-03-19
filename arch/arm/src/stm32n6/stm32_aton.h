@@ -531,4 +531,15 @@
 
 #define ATON_SHIFT_ENCODE(x)      ((x) + 16)
 
+/****************************************************************************
+ * CACHEAXI Registers (0x580DFC00 — NPU AXI cache controller)
+ ****************************************************************************/
+
+#define ATON_CACHEAXI_CR1         0x00   /* Enable (bit 0), full invalidate (bit 1) */
+#define ATON_CACHEAXI_SR          0x04   /* BUSYF (0), BUSYCMDF (3), CMDENDF (4) */
+#define ATON_CACHEAXI_FCR         0x0C   /* Flag clear (write 0x12) */
+#define ATON_CACHEAXI_CR2         0x100  /* CACHECMD (bits 1-2) + STARTCMD (bit 0) */
+#define ATON_CACHEAXI_RSADDR      0x104  /* Range start address */
+#define ATON_CACHEAXI_READDR      0x108  /* Range end address (inclusive) */
+
 #endif /* __ARCH_ARM_SRC_STM32N6_STM32_ATON_H */
