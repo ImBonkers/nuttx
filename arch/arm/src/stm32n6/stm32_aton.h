@@ -227,6 +227,7 @@
 
 /* STRENG_EVENT bitfields */
 
+#define STRENG_EVENT_EN_BUFBL      (1 << 16)
 #define STRENG_EVENT_EN_OFLOW_FRM  (1 << 19)
 #define STRENG_EVENT_EN_ILLCFG     (1 << 20)
 #define STRENG_EVENT_FRMTRG_EN     (1 << 23)
@@ -530,6 +531,17 @@
 /* Shift encoding: signed shift → HW encoding (range 0-39, no shift = 16) */
 
 #define ATON_SHIFT_ENCODE(x)      ((x) + 16)
+
+/****************************************************************************
+ * INTCTRL Registers (ATON_BASE + 0x1000 — interrupt routing)
+ ****************************************************************************/
+
+#define ATON_INTCTRL_CTRL         0x00
+#define ATON_INTCTRL_INTREG       0x08   /* RO: active internal signals */
+#define ATON_INTCTRL_INTSET       0x0C
+#define ATON_INTCTRL_INTCLR       0x10   /* Write-1-to-clear signals */
+#define ATON_INTCTRL_INTORMSK(n)  (0x14 + (n) * 4)  /* OR-mask → NPUn_IRQ */
+#define ATON_INTCTRL_INTANDMSK(n) (0x24 + (n) * 4)  /* AND-mask */
 
 /****************************************************************************
  * CACHEAXI Registers (0x580DFC00 — NPU AXI cache controller)

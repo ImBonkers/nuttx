@@ -136,6 +136,7 @@
 #define STM32_RCC_DIVENCR_OFFSET       0x1240  /* IC dividers enable CLEAR register */
 #define STM32_RCC_BUSENSR_OFFSET       0x0a44  /* Embedded buses enable SET register */
 #define STM32_RCC_MEMENSR_OFFSET       0x0a4c  /* Embedded memories enable SET register */
+#define STM32_RCC_MEMENCR_OFFSET       0x124c  /* Embedded memories enable CLEAR register */
 
 /* Clock enable registers (read/write) */
 
@@ -271,6 +272,7 @@
 #define STM32_RCC_BUSENSR      (STM32_RCC_BASE + STM32_RCC_BUSENSR_OFFSET)
 #define STM32_RCC_MEMENR       (STM32_RCC_BASE + STM32_RCC_MEMENR_OFFSET)
 #define STM32_RCC_MEMENSR      (STM32_RCC_BASE + STM32_RCC_MEMENSR_OFFSET)
+#define STM32_RCC_MEMENCR      (STM32_RCC_BASE + STM32_RCC_MEMENCR_OFFSET)
 
 #define STM32_RCC_AHB1ENR      (STM32_RCC_BASE + STM32_RCC_AHB1ENR_OFFSET)
 #define STM32_RCC_AHB2ENR      (STM32_RCC_BASE + STM32_RCC_AHB2ENR_OFFSET)

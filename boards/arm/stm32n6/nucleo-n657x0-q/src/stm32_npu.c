@@ -282,14 +282,19 @@ static int stm32_npu_hw_init(void)
       }
   }
 
-  /* Disable CACHEAXI after self-test.  Leaving it enabled breaks XSPI2
-   * indirect-mode reads (CACHEAXI intercepts AXI traffic to the XSPI2
-   * memory-mapped region and returns stale zeros).  CACHEAXI will be
-   * re-enabled by the NPU driver before inference when weight reads
-   * from XSPI2 flash are needed.
+  /* Disable CACHEAXI controller after self-test.  The CACHEAXI bus clock
+   * must stay on (HPDMA1 needs it for AXI access).  Only the controller
+   * enable (CR1.EN) is cleared — the caching logic is inactive but the
+   * clock fabric remains powered for DMA.
+   *
+   * CRITICAL: Do NOT write to NPU INTCTRL registers between this point
+   * and XSPI2 init.  AXI traffic to the NPU fabric while the CACHEAXI
+   * controller is freshly disabled can wake the caching logic and cause
+   * XSPI2 indirect-mode reads to return stale zeros.  INTCTRL setup is
+   * deferred to the first NPUIOC_RUN_SYNC call.
    */
 
-  putreg32(0, STM32_CACHEAXI_BASE + 0x00);  /* CR1 = 0: disable */
+  putreg32(0, STM32_CACHEAXI_BASE + 0x00);  /* CR1 = 0: disable controller */
 
   return OK;
 }

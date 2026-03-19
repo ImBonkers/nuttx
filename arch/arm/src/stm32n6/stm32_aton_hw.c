@@ -421,7 +421,10 @@ int LL_Streng_TensorInit(int id,
   cid_cache |= (conf->cache_linesize << STRENG_CID_LINESIZE_SHIFT)
                 & STRENG_CID_LINESIZE_MASK;
 
-  /* EVENT */
+  /* EVENT — do NOT set EN_BUFBL here.  EN_BUFBL causes the STRENG to
+   * stall waiting for event acknowledgment, breaking the HW pipeline.
+   * STRENG completion is detected by polling CTRL.RUNNING instead.
+   */
 
   event = 0;
   if (conf->dir == 1)

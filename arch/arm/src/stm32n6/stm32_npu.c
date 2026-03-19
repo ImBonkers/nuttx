@@ -26,8 +26,11 @@
  * Wraps native ATON epoch execution into NuttX's ai_engine upper/lower-half
  * framework, exposing /dev/npu0 with ioctl interface.
  *
- * All HW register access (stm32_aton_hw.c) and generated model code
- * (npu_test.c) are compiled into the kernel via Make.defs.
+ * Epoch wait strategy: yield-poll.  EN_BUFBL cannot be used because it
+ * stalls the STRENG pipeline (it's a per-block synchronization mechanism
+ * for CPU-in-the-loop SW epochs, not a passive completion notification).
+ * Instead, we poll STRENG CTRL.RUNNING with nxsig_usleep() between polls
+ * so the CPU yields to other NuttX tasks during inference.
  ****************************************************************************/
 
 /****************************************************************************
@@ -44,6 +47,8 @@
 #include <errno.h>
 
 #include <nuttx/cache.h>
+#include <nuttx/clock.h>
+#include <nuttx/signal.h>
 #include <nuttx/aie/ai_engine.h>
 
 #include "arm_internal.h"
@@ -69,7 +74,15 @@ extern bool LL_ATON_EC_Inference_Init_npu_test(void);
  * Pre-processor Definitions
  ****************************************************************************/
 
-/* CACHEAXI register offsets — defined in stm32_aton.h */
+/* Poll interval (microseconds) — short enough for low latency,
+ * long enough to let other tasks run.
+ */
+
+#define NPU_POLL_INTERVAL_US  100
+
+/* Timeout in milliseconds per epoch */
+
+#define NPU_EPOCH_TIMEOUT_MS  5000
 
 /****************************************************************************
  * Private Types
@@ -118,12 +131,54 @@ static struct stm32_npu_s g_npu_dev;
  ****************************************************************************/
 
 /****************************************************************************
- * Name: stm32_npu_init
+ * Name: streng_wait_yield
  *
  * Description:
- *   AIE ops->init: Cache the epoch block table and buffer info pointers
- *   from the generated model.  Called via ioctl(AIE_CMD_LOAD).
+ *   Wait for STRENGs in mask to complete, yielding CPU between polls.
+ *   Returns 0 on success, -ETIMEDOUT on timeout.
  *
+ ****************************************************************************/
+
+static int streng_wait_yield(uint32_t mask)
+{
+  clock_t deadline = clock_systime_ticks() +
+                     MSEC2TICK(NPU_EPOCH_TIMEOUT_MS);
+  int i;
+
+  for (; ; )
+    {
+      uint32_t running = 0;
+
+      for (i = 0; i < ATON_STRENG_NUM; i++)
+        {
+          if (mask & (1u << i))
+            {
+              running |= getreg32(ATON_STRENG_BASE(i) + ATON_STRENG_CTRL)
+                         & STRENG_CTRL_RUNNING;
+            }
+        }
+
+      if (!running)
+        {
+          return 0;
+        }
+
+      if ((int32_t)(clock_systime_ticks() - deadline) >= 0)
+        {
+          return -ETIMEDOUT;
+        }
+
+      /* Yield CPU to other tasks via sched_yield().  This lets NuttX
+       * run ready tasks without the minimum-tick overhead of usleep.
+       * If no other task is ready, returns immediately (tight poll).
+       */
+
+      sched_yield();
+    }
+}
+
+/****************************************************************************
+ * Name: stm32_npu_init
  ****************************************************************************/
 
 static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
@@ -134,8 +189,6 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
     {
       return -EBUSY;
     }
-
-  /* Get epoch block table and I/O buffer info from generated model */
 
   priv->epoch_blocks = LL_ATON_EpochBlockItems_npu_test();
   priv->input_bufs   = LL_ATON_Input_Buffers_Info_npu_test();
@@ -148,24 +201,32 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
       return -EIO;
     }
 
-  /* Call model network init (sets up any internal state) */
+  /* Reject models with SW or hybrid epochs — only pure HW epochs allowed */
+
+  {
+    const EpochBlock_ItemTypeDef *ebs = priv->epoch_blocks;
+    int i;
+
+    for (i = 0; !(ebs[i].flags & EpochBlock_Flags_last_eb); i++)
+      {
+        if (ebs[i].flags & (EpochBlock_Flags_pure_sw |
+                            EpochBlock_Flags_hybrid))
+          {
+            syslog(LOG_ERR, "NPU: model has SW/hybrid epochs, rejected\n");
+            return -ENOTSUP;
+          }
+      }
+  }
 
   LL_ATON_EC_Network_Init_npu_test();
   LL_ATON_EC_Inference_Init_npu_test();
 
   priv->initialized = true;
-
-  /* Return model ID = 1 (positive = success in AIE framework) */
-
   return 1;
 }
 
 /****************************************************************************
  * Name: stm32_npu_deinit
- *
- * Description:
- *   AIE ops->deinit: Release model resources.
- *
  ****************************************************************************/
 
 static int stm32_npu_deinit(FAR struct aie_lowerhalf_s *lower, int id)
@@ -182,11 +243,6 @@ static int stm32_npu_deinit(FAR struct aie_lowerhalf_s *lower, int id)
 
 /****************************************************************************
  * Name: stm32_npu_feed_input
- *
- * Description:
- *   AIE ops->feed_input: Copy user data to NPU input buffer.
- *   Called via ioctl(AIE_CMD_FEED_INPUT, buf).
- *
  ****************************************************************************/
 
 static int stm32_npu_feed_input(FAR struct aie_lowerhalf_s *lower, int id,
@@ -202,15 +258,10 @@ static int stm32_npu_feed_input(FAR struct aie_lowerhalf_s *lower, int id,
       return -EINVAL;
     }
 
-  /* Get the model's input buffer pointer and size */
-
   dst  = LL_Buffer_addr_start(&priv->input_bufs[0]);
   size = LL_ATON_NPU_TEST_IN_1_SIZE_BYTES;
 
   memcpy(dst, user_buf, size);
-
-  /* Flush CPU D-cache so NPU can see the input data */
-
   up_clean_dcache((uintptr_t)dst, (uintptr_t)dst + size);
 
   return OK;
@@ -218,11 +269,6 @@ static int stm32_npu_feed_input(FAR struct aie_lowerhalf_s *lower, int id,
 
 /****************************************************************************
  * Name: stm32_npu_get_output
- *
- * Description:
- *   AIE ops->get_output: Copy NPU output to user buffer.
- *   Called via ioctl(AIE_CMD_GET_OUTPUT, buf).
- *
  ****************************************************************************/
 
 static int stm32_npu_get_output(FAR struct aie_lowerhalf_s *lower, int id,
@@ -241,10 +287,7 @@ static int stm32_npu_get_output(FAR struct aie_lowerhalf_s *lower, int id,
   src  = LL_Buffer_addr_start(&priv->output_bufs[0]);
   size = LL_ATON_NPU_TEST_OUT_1_SIZE_BYTES;
 
-  /* Invalidate CPU D-cache to read fresh NPU output */
-
   up_invalidate_dcache((uintptr_t)src, (uintptr_t)src + size);
-
   memcpy(user_buf, src, size);
 
   return OK;
@@ -252,10 +295,6 @@ static int stm32_npu_get_output(FAR struct aie_lowerhalf_s *lower, int id,
 
 /****************************************************************************
  * Name: stm32_npu_control
- *
- * Description:
- *   AIE ops->control: Handle extended ioctl commands.
- *
  ****************************************************************************/
 
 static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
@@ -274,34 +313,40 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
     {
       case NPUIOC_RUN_SYNC:
 
-        /* Enable CACHEAXI for NPU weight reads from XSPI2 flash.
-         * Must be enabled before inference and disabled after, because
-         * an active CACHEAXI intercepts XSPI2 AXI traffic and breaks
-         * indirect-mode MTD reads (returns stale zeros).
-         */
+        /* Enable CACHEAXI controller for NPU weight reads */
 
         putreg32(0x02, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
         while (getreg32(STM32_CACHEAXI_BASE + ATON_CACHEAXI_SR) & 1);
         putreg32(0x01 | 0x3f0f0000,
                  STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
 
-        /* Execute all epoch blocks sequentially */
+        /* Execute all epoch blocks with yielding poll wait */
 
         ebs = priv->epoch_blocks;
 
         for (i = 0; ; i++)
           {
+            int ret;
+
             if (ebs[i].flags & EpochBlock_Flags_last_eb)
               {
                 break;
               }
 
             ebs[i].start_epoch_block(&ebs[i]);
-            LL_Streng_Wait(ebs[i].wait_mask);
+
+            ret = streng_wait_yield(ebs[i].wait_mask);
+            if (ret < 0)
+              {
+                syslog(LOG_ERR, "NPU: epoch %d timeout\n", i);
+                putreg32(0, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+                return ret;
+              }
+
             ebs[i].end_epoch_block(&ebs[i]);
           }
 
-        /* Disable CACHEAXI to restore XSPI2 indirect-mode access */
+        /* Disable CACHEAXI controller to restore XSPI2 */
 
         putreg32(0, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
 
@@ -316,8 +361,6 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
           info->n_outputs         = LL_ATON_NPU_TEST_OUT_NUM;
           info->input_size_bytes  = LL_ATON_NPU_TEST_IN_1_SIZE_BYTES;
           info->output_size_bytes = LL_ATON_NPU_TEST_OUT_1_SIZE_BYTES;
-
-          /* Input: [1, 3, 32, 32], Output: [1, 16, 32, 32] */
 
           info->input_shape[0]  = 1;
           info->input_shape[1]  = 3;
@@ -337,16 +380,6 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
 
 /****************************************************************************
  * Public Functions
- ****************************************************************************/
-
-/****************************************************************************
- * Name: stm32_npu_initialize
- *
- * Description:
- *   Initialize NPU driver state and return AIE lower-half driver.
- *   HW init (RAMCFG, RIFSC, ATON fabric, etc.) is done separately by
- *   the board-level stm32_npu_setup() before this is called.
- *
  ****************************************************************************/
 
 FAR struct aie_lowerhalf_s *stm32_npu_initialize(void)
