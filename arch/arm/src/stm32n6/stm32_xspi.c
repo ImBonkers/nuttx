@@ -1685,9 +1685,11 @@ static void xspi_enter_opi_dtr_mmap(struct stm32_xspidev_s *priv)
   xspi_spi_write_enable(priv);
   xspi_spi_write_cfg2(priv, 0x00000000, 0x01);
 
-  /* Wait for flash to complete mode transition */
+  /* Wait for flash to complete mode transition.
+   * Datasheet max = 40ms, typical << 1ms. Use 1ms.
+   */
 
-  up_mdelay(40);
+  up_mdelay(1);
 
   /* Step 3: Reconfigure XSPI controller for OPI STR */
 
