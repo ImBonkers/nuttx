@@ -867,10 +867,32 @@ static int xspi_receive_dma(struct stm32_xspidev_s *priv,
 
   nbytes_aligned = (nbytes + 31) & ~31u;
 
-  /* Pre-invalidate RX bounce buffer */
+  /* Clean+invalidate entire D-cache by set/way before DMA.
+   * MVA-based ops (DCIMVAC) fail silently on M55 Secure at certain
+   * alignments.  Set/way DCCISW is safe: cleans dirty lines first,
+   * then invalidates.  ~2μs for 32KB cache.
+   */
 
-  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
-                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
+  __asm volatile ("dsb sy");
+  {
+    uint32_t ccsidr = getreg32(0xe000ed80);
+    uint32_t sets = (ccsidr >> 13) & 0x7fff;
+    uint32_t sshift = ((ccsidr & 7) + 2) + 2;
+    uint32_t ways = (ccsidr >> 3) & 0x3ff;
+    uint32_t wshift = __builtin_clz(ways) & 0x1f;
+    do
+      {
+        int32_t w = ways;
+        do
+          {
+            putreg32((w << wshift) | (sets << sshift), 0xe000ef74);
+          }
+        while (w--);
+      }
+    while (sets--);
+  }
+  __asm volatile ("dsb sy");
+  __asm volatile ("isb sy");
 
   /* Build RX DMA config: XSPI DR (peripheral) → aligned rxdma_buf */
 
@@ -932,10 +954,28 @@ static int xspi_receive_dma(struct stm32_xspidev_s *priv,
   xspi_putreg(priv, XSPI_FCR_CTCF, STM32_XSPI_FCR_OFFSET);
   xspi_abort(priv);
 
-  /* Invalidate and copy from aligned bounce buffer */
+  /* Clean+invalidate entire D-cache by set/way after DMA */
 
-  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
-                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
+  __asm volatile ("dsb sy");
+  {
+    uint32_t ccsidr = getreg32(0xe000ed80);
+    uint32_t sets = (ccsidr >> 13) & 0x7fff;
+    uint32_t sshift = ((ccsidr & 7) + 2) + 2;
+    uint32_t ways = (ccsidr >> 3) & 0x3ff;
+    uint32_t wshift = __builtin_clz(ways) & 0x1f;
+    do
+      {
+        int32_t w = ways;
+        do
+          {
+            putreg32((w << wshift) | (sets << sshift), 0xe000ef74);
+          }
+        while (w--);
+      }
+    while (sets--);
+  }
+  __asm volatile ("dsb sy");
+  __asm volatile ("isb sy");
   memcpy(xctn->buffer, priv->rxdma_buf, nbytes);
 
   return OK;
