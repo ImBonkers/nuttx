@@ -1885,4 +1885,14 @@ void stm32_xspi_exit_memorymapped(struct qspi_dev_s *dev)
   xspi_lock(dev, false);
 }
 
+int stm32_xspi_mmap_lock(void)
+{
+  return nxmutex_lock(&g_xspi0dev.lock);
+}
+
+void stm32_xspi_mmap_unlock(void)
+{
+  nxmutex_unlock(&g_xspi0dev.lock);
+}
+
 #endif /* CONFIG_STM32N6_XSPI */

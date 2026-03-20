@@ -121,6 +121,9 @@ void stm32_xspi_enter_memorymapped(struct qspi_dev_s *dev,
 
 void stm32_xspi_exit_memorymapped(struct qspi_dev_s *dev);
 
+int stm32_xspi_mmap_lock(void);
+void stm32_xspi_mmap_unlock(void);
+
 #undef EXTERN
 #if defined(__cplusplus)
 }

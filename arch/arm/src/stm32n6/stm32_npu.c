@@ -53,6 +53,7 @@
 
 #include "arm_internal.h"
 #include "stm32_npu.h"
+#include "stm32_xspi.h"
 #include "hardware/stm32n6xxx_memorymap.h"
 
 #include "stm32_aton.h"
@@ -129,6 +130,17 @@ static struct stm32_npu_s g_npu_dev;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+static void cacheaxi_disable(void)
+{
+  /* Full invalidate while still enabled, wait for quiescence, then off */
+
+  putreg32(0x03 | 0x3f0f0000,
+           STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+  while (getreg32(STM32_CACHEAXI_BASE + ATON_CACHEAXI_SR) & 0x09);
+  putreg32(0x12, STM32_CACHEAXI_BASE + ATON_CACHEAXI_FCR);
+  putreg32(0, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+}
 
 /****************************************************************************
  * Name: streng_wait_yield
@@ -312,45 +324,48 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
   switch (cmd)
     {
       case NPUIOC_RUN_SYNC:
+        {
+          int ret;
 
-        /* Enable CACHEAXI controller for NPU weight reads */
+          ret = stm32_xspi_mmap_lock();
+          if (ret < 0)
+            {
+              return ret;
+            }
 
-        putreg32(0x02, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
-        while (getreg32(STM32_CACHEAXI_BASE + ATON_CACHEAXI_SR) & 1);
-        putreg32(0x01 | 0x3f0f0000,
-                 STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+          putreg32(0x02, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+          while (getreg32(STM32_CACHEAXI_BASE + ATON_CACHEAXI_SR) & 1);
+          putreg32(0x01 | 0x3f0f0000,
+                   STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
 
-        /* Execute all epoch blocks with yielding poll wait */
+          ebs = priv->epoch_blocks;
 
-        ebs = priv->epoch_blocks;
+          for (i = 0; ; i++)
+            {
+              if (ebs[i].flags & EpochBlock_Flags_last_eb)
+                {
+                  break;
+                }
 
-        for (i = 0; ; i++)
-          {
-            int ret;
+              ebs[i].start_epoch_block(&ebs[i]);
 
-            if (ebs[i].flags & EpochBlock_Flags_last_eb)
-              {
-                break;
-              }
+              ret = streng_wait_yield(ebs[i].wait_mask);
+              if (ret < 0)
+                {
+                  syslog(LOG_ERR, "NPU: epoch %d timeout\n", i);
+                  cacheaxi_disable();
+                  stm32_xspi_mmap_unlock();
+                  return ret;
+                }
 
-            ebs[i].start_epoch_block(&ebs[i]);
+              ebs[i].end_epoch_block(&ebs[i]);
+            }
 
-            ret = streng_wait_yield(ebs[i].wait_mask);
-            if (ret < 0)
-              {
-                syslog(LOG_ERR, "NPU: epoch %d timeout\n", i);
-                putreg32(0, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
-                return ret;
-              }
+          cacheaxi_disable();
+          stm32_xspi_mmap_unlock();
 
-            ebs[i].end_epoch_block(&ebs[i]);
-          }
-
-        /* Disable CACHEAXI controller to restore XSPI2 */
-
-        putreg32(0, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
-
-        return OK;
+          return OK;
+        }
 
       case NPUIOC_GET_INFO:
         {
