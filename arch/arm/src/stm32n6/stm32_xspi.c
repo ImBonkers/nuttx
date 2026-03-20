@@ -1708,13 +1708,12 @@ static void xspi_enter_opi_dtr_mmap(struct stm32_xspidev_s *priv)
   /* MTYP=0 (Standard) is default after clearing */
   xspi_putreg(priv, regval, STM32_XSPI_DCR1_OFFSET);
 
-  /* DCR2: prescaler = 1 → divide by 2 → 100MHz OPI DTR clock.
-   * Conservative start; can try prescaler=0 (200MHz) once verified.
+  /* DCR2: prescaler = 0 → divide by 1 → 200MHz OPI STR clock.
+   * MX25UM51245G supports up to 200MHz in OPI STR mode.
    */
 
   regval = xspi_getreg(priv, STM32_XSPI_DCR2_OFFSET);
   regval &= ~XSPI_DCR2_PRESCALER_MASK;
-  regval |= (1 << XSPI_DCR2_PRESCALER_SHIFT);
   xspi_putreg(priv, regval, STM32_XSPI_DCR2_OFFSET);
 
   /* Clear DCR3/DCR4 — no CS boundary or refresh needed for mmap reads */
