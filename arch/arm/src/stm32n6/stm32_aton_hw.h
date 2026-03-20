@@ -34,6 +34,10 @@
 #  define ATON_LIB_PHYSICAL_TO_VIRTUAL_ADDR(addr) (addr)
 #endif
 
+#ifndef ATON_LIB_VIRTUAL_TO_PHYSICAL_ADDR
+#  define ATON_LIB_VIRTUAL_TO_PHYSICAL_ADDR(addr) (addr)
+#endif
+
 /* Switch context macros — must match generated designated initializers */
 
 #define LL_Switch_Init_Dest()      .dest
@@ -370,6 +374,105 @@ typedef struct
 
 typedef LL_Switch_InitTypeDef LL_Switch_DeinitTypeDef;
 
+/* Activation unit */
+
+typedef enum
+{
+  ACTIV_RELU = 1,
+  ACTIV_PRELU,
+  ACTIV_TRELU,
+  ACTIV_FUNC,
+  ACTIV_LUT
+} LL_Activacc_Op;
+
+typedef struct
+{
+  unsigned rounding_f : 1;
+  unsigned saturation_f : 1;
+  unsigned round_mode_f : 2;
+  unsigned inbytes_f : 2;
+  unsigned outbytes_f : 2;
+  unsigned rounding_o : 1;
+  unsigned saturation_o : 1;
+  unsigned round_mode_o : 1;
+  unsigned relu_mode_o : 1;
+  unsigned outbytes_o : 2;
+  unsigned signedop : 1;
+  unsigned char shift_f;
+  unsigned char shift_o;
+  unsigned parameter;
+  unsigned parameter_2;
+  unsigned nbytes;
+  ll_aton_pointer ROM0_vector;
+  ll_aton_pointer ROM1_vector;
+  ll_aton_pointer LUT_vector;
+  unsigned ROM0_nbytes;
+  unsigned ROM1_nbytes;
+  unsigned char shift_b;
+  unsigned char shift_c;
+  unsigned char shift_norm;
+  unsigned char bwidth;
+  int fsub;
+  LL_Activacc_Op operation;
+} LL_Activacc_InitTypeDef;
+
+int LL_Activacc_Init(int id,
+                     const LL_Activacc_InitTypeDef *conf);
+
+/* Pooling unit */
+
+typedef enum
+{
+  POOL_MAX = 1,
+  POOL_MIN,
+  POOL_AVG,
+  POOL_GMAX,
+  POOL_GMIN,
+  POOL_GAVG
+} LL_Poolacc_Op;
+
+typedef struct
+{
+  LL_Poolacc_Op operation;
+  unsigned avgnopad : 1;
+  unsigned short inputX;
+  unsigned short inputY;
+  unsigned short outputX;
+  unsigned short outputY;
+  unsigned char poolWinX;
+  unsigned char poolWinY;
+  unsigned char strideX;
+  unsigned char strideY;
+  unsigned short topCrop;
+  unsigned short bottomCrop;
+  unsigned short leftCrop;
+  unsigned short rightCrop;
+  unsigned short topPad;
+  unsigned short bottomPad;
+  unsigned short leftPad;
+  unsigned short rightPad;
+  unsigned short batchSize;
+  unsigned char shift_f;
+  unsigned char shift_o;
+  unsigned dualLine : 1;
+  unsigned nbytes : 2;
+  unsigned rounding_f : 1;
+  unsigned saturation_f : 1;
+  unsigned round_mode_f : 2;
+  unsigned inbytes_f : 2;
+  unsigned outbytes_f : 2;
+  unsigned rounding_o : 1;
+  unsigned saturation_o : 1;
+  unsigned round_mode_o : 1;
+  unsigned relu_mode_o : 1;
+  unsigned outbytes_o : 2;
+  short mulval;
+  unsigned pad_val_en : 1;
+  short pad_val;
+} LL_Poolacc_InitTypeDef;
+
+int LL_Poolacc_Init(int id, const LL_Poolacc_InitTypeDef *conf);
+
 /* Enable/Disable units */
 
 typedef struct
@@ -427,6 +530,7 @@ typedef enum
   DataType_UINT16    = 8,
   DataType_INT16     = 9,
   DataType_INT32     = 10,
+  DataType_FXP       = 11,
   DataType_FLOAT16   = 14,
 } Buffer_DataType_TypeDef;
 
@@ -558,5 +662,6 @@ int LL_Streng_Wait(uint32_t mask);
 void LL_ATON_EnableClock(unsigned int clock);
 void LL_ATON_DisableClock(unsigned int clock);
 void LL_ATON_Cache_MCU_Invalidate_Range(uintptr_t addr, uint32_t size);
+void LL_ATON_Cache_MCU_Clean_Range(uintptr_t addr, uint32_t size);
 
 #endif /* __ARCH_ARM_SRC_STM32N6_STM32_ATON_HW_H */

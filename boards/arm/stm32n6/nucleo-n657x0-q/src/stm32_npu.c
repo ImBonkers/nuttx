@@ -129,10 +129,11 @@ static int stm32_npu_hw_init(void)
 
   putreg32(RCC_AHB2ENR_RAMCFGEN, STM32_RCC_AHB2ENSR);
 
-  modifyreg32(STM32_RAMCFG_BASE + 0x100, (1 << 20), 0);
-  modifyreg32(STM32_RAMCFG_BASE + 0x180, (1 << 20), 0);
-  modifyreg32(STM32_RAMCFG_BASE + 0x200, (1 << 20), 0);
-  modifyreg32(STM32_RAMCFG_BASE + 0x280, (1 << 20), 0);
+  modifyreg32(STM32_RAMCFG_BASE + 0x080, (1 << 20), 0);  /* SRAM2 */
+  modifyreg32(STM32_RAMCFG_BASE + 0x100, (1 << 20), 0);  /* SRAM3 */
+  modifyreg32(STM32_RAMCFG_BASE + 0x180, (1 << 20), 0);  /* SRAM4 */
+  modifyreg32(STM32_RAMCFG_BASE + 0x200, (1 << 20), 0);  /* SRAM5 */
+  modifyreg32(STM32_RAMCFG_BASE + 0x280, (1 << 20), 0);  /* SRAM6 */
 
   putreg32(0x310, STM32_RIFSC_BASE + 0xc14);
   modifyreg32(STM32_RIFSC_BASE + 0x1c, 0, (1 << 10));

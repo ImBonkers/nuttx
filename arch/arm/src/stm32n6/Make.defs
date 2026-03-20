@@ -105,8 +105,19 @@ endif
 
 ifeq ($(CONFIG_STM32N6_NPU),y)
 CHIP_CSRCS += stm32_npu.c stm32_aton_hw.c stm32_npu_model.c
+
+# ST LL_ATON runtime (hardware NPU register programming)
+STEDGEAI := $(HOME)/STMicroelectronics/STEdgeAI3/3.0/Middlewares/ST/AI/Npu
+CHIP_CSRCS += stm32_ll_aton.c stm32_ll_aton_util.c stm32_mcu_cache.c
+
+# Include paths: compat layer first (provides stm32n6xx.h shim),
+# then ST SDK headers
+CFLAGS += -I$(TOPDIR)$(DELIM)..$(DELIM)npu$(DELIM)compat
+CFLAGS += -I$(STEDGEAI)/ll_aton
+CFLAGS += -I$(STEDGEAI)/Devices/STM32N6xx
 CFLAGS += -I$(TOPDIR)$(DELIM)..$(DELIM)npu$(DELIM)model$(DELIM)generated
 CFLAGS += -DCPU_IN_SECURE_STATE
+CFLAGS += -DLL_ATON_PLATFORM=9 -DLL_ATON_OSAL=1 -DLL_ATON_RT_MODE=1
 endif
 
 # Chip-specific RCC

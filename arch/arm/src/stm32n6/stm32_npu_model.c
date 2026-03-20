@@ -9,4 +9,10 @@
  *
  ****************************************************************************/
 
+#include <nuttx/config.h>
+
+#ifdef CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET
+#include "people_det.c"
+#else
 #include "npu_test.c"
+#endif

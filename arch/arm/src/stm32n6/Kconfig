@@ -423,6 +423,16 @@ config STM32N6_NPU
 		(900 MHz) for NPU core and SRAM clocks, and enables the
 		NPU peripheral clock on AHB5.
 
+config STM32N6_NPU_MODEL_PEOPLE_DET
+	bool "TinyYOLOv2 people detection model"
+	default n
+	depends on STM32N6_NPU
+	---help---
+		Use the TinyYOLOv2 people detection model (224x224 RGB input,
+		7x7x30 int8 output, 11 HW epochs + 1 stubbed SW epoch).
+		If disabled, the small test model (32x32x3 int8, 4 HW epochs)
+		is used instead.
+
 endmenu
 
 menu "RTC Configuration"
