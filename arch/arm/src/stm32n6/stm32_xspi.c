@@ -197,6 +197,7 @@ static void    *xspi_alloc(struct qspi_dev_s *dev, size_t buflen);
 static void     xspi_free(struct qspi_dev_s *dev, void *buffer);
 
 static int      xspi_hw_initialize(struct stm32_xspidev_s *priv);
+static void     xspi_flash_reset(struct stm32_xspidev_s *priv);
 
 /****************************************************************************
  * Private Data
@@ -1466,6 +1467,440 @@ static void xspi_free(struct qspi_dev_s *dev, void *buffer)
 }
 
 /****************************************************************************
+ * Name: xspi_spi_write_enable
+ *
+ * Description:
+ *   Send Write Enable (0x06) in SPI 1-1-1 mode.
+ *   Controller must already be enabled and in SPI mode.
+ ****************************************************************************/
+
+static void xspi_spi_write_enable(struct stm32_xspidev_s *priv)
+{
+  uint32_t regval;
+
+  xspi_abort(priv);
+  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+  xspi_putreg(priv,
+               XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+               XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+               STM32_XSPI_FCR_OFFSET);
+
+  /* FMODE = indirect write */
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~XSPI_CR_FMODE_MASK;
+  regval |= XSPI_CR_FMODE(XSPI_FMODE_INDWR);
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  /* CCR: instruction only (single, 8-bit) — no address, no data */
+
+  xspi_putreg(priv,
+               XSPI_CCR_IMODE(CCR_IMODE_SINGLE),
+               STM32_XSPI_CCR_OFFSET);
+
+  /* TCR: no dummy cycles */
+
+  regval = xspi_getreg(priv, STM32_XSPI_TCR_OFFSET);
+  regval &= ~XSPI_TCR_DCYC_MASK;
+  xspi_putreg(priv, regval, STM32_XSPI_TCR_OFFSET);
+
+  /* IR: Write Enable command triggers transfer */
+
+  xspi_putreg(priv, 0x06, STM32_XSPI_IR_OFFSET);
+
+  xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+  xspi_putreg(priv, XSPI_FCR_CTCF, STM32_XSPI_FCR_OFFSET);
+}
+
+/****************************************************************************
+ * Name: xspi_spi_write_cfg2
+ *
+ * Description:
+ *   Write a value to MX25UM51245G Configuration Register 2 (cmd 0x72)
+ *   in SPI 1-1-1 mode with 4-byte address and 1 byte data.
+ *   Caller must send Write Enable first.
+ ****************************************************************************/
+
+static void xspi_spi_write_cfg2(struct stm32_xspidev_s *priv,
+                                 uint32_t addr, uint8_t val)
+{
+  uint32_t regval;
+
+  xspi_abort(priv);
+  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+  xspi_putreg(priv,
+               XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+               XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+               STM32_XSPI_FCR_OFFSET);
+
+  /* DLR: 1 byte */
+
+  xspi_putreg(priv, 0, STM32_XSPI_DLR_OFFSET);
+
+  /* FMODE = indirect write */
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~XSPI_CR_FMODE_MASK;
+  regval |= XSPI_CR_FMODE(XSPI_FMODE_INDWR);
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  /* CCR: single instruction + single 32-bit address + single data */
+
+  xspi_putreg(priv,
+               XSPI_CCR_IMODE(CCR_IMODE_SINGLE) |
+               XSPI_CCR_ADMODE(CCR_ADMODE_SINGLE) |
+               XSPI_CCR_ADSIZE_32b |
+               XSPI_CCR_DMODE(CCR_DMODE_SINGLE),
+               STM32_XSPI_CCR_OFFSET);
+
+  /* TCR: no dummy cycles */
+
+  regval = xspi_getreg(priv, STM32_XSPI_TCR_OFFSET);
+  regval &= ~XSPI_TCR_DCYC_MASK;
+  xspi_putreg(priv, regval, STM32_XSPI_TCR_OFFSET);
+
+  /* IR: Write CFG2 command (0x72) */
+
+  xspi_putreg(priv, 0x72, STM32_XSPI_IR_OFFSET);
+
+  /* AR: address — triggers the transfer */
+
+  xspi_putreg(priv, addr, STM32_XSPI_AR_OFFSET);
+
+  /* Write the data byte */
+
+  xspi_waitstatusflags(priv, XSPI_SR_FTF, 1);
+  *(volatile uint8_t *)(priv->base + STM32_XSPI_DR_OFFSET) = val;
+
+  xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+  xspi_putreg(priv, XSPI_FCR_CTCF, STM32_XSPI_FCR_OFFSET);
+}
+
+/****************************************************************************
+ * Name: xspi_reinit_spi_mode
+ *
+ * Description:
+ *   Reinitialize the XSPI controller for SPI 1-1-1 mode after OPI STR.
+ *   Flash must already be in SPI mode.
+ ****************************************************************************/
+
+static void xspi_reinit_spi_mode(struct stm32_xspidev_s *priv)
+{
+  uint32_t regval;
+
+  /* Disable XSPI */
+
+  xspi_abort(priv);
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~XSPI_CR_EN;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
+  /* Prescaler = 7 → 200MHz / 8 = 25MHz for SPI mode */
+
+  regval = xspi_getreg(priv, STM32_XSPI_DCR2_OFFSET);
+  regval &= ~XSPI_DCR2_PRESCALER_MASK;
+  regval |= (7 << XSPI_DCR2_PRESCALER_SHIFT);
+  xspi_putreg(priv, regval, STM32_XSPI_DCR2_OFFSET);
+
+  /* TCR: sample shift on, no DHQC, no dummy cycles */
+
+  xspi_putreg(priv, XSPI_TCR_SSHIFT, STM32_XSPI_TCR_OFFSET);
+
+  /* DCR1: Macronix memory type, keep DEVSIZE and CSHT */
+
+  regval = xspi_getreg(priv, STM32_XSPI_DCR1_OFFSET);
+  regval &= ~(XSPI_DCR1_CKMODE | XSPI_DCR1_MTYP_MASK);
+  regval |= XSPI_DCR1_MTYP_MACRONIX;
+  xspi_putreg(priv, regval, STM32_XSPI_DCR1_OFFSET);
+
+  /* Clear DCR3/DCR4 */
+
+  xspi_putreg(priv, 0, STM32_XSPI_DCR3_OFFSET);
+  xspi_putreg(priv, 0, STM32_XSPI_DCR4_OFFSET);
+
+  /* Enable XSPI */
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval |= XSPI_CR_EN;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
+  /* Restore stored frequency/actual so setfrequency works correctly */
+
+  priv->frequency = 0;
+  priv->actual = 0;
+}
+
+/****************************************************************************
+ * Name: xspi_enter_opi_dtr_mmap
+ *
+ * Description:
+ *   Switch flash to OPI STR mode and enter OPI STR memory-mapped read.
+ *   Used for fast NPU weight reads (~100 MB/s vs ~3 MB/s in SPI 1-1-1).
+ *
+ *   Sequence:
+ *   1. Exit current SPI mmap (if active)
+ *   2. Send flash commands in SPI mode to enable SOPI
+ *   3. Reconfigure XSPI controller for OPI STR
+ *   4. Enter OPI STR memory-mapped read mode
+ *
+ *   Caller must hold priv->lock.
+ ****************************************************************************/
+
+static void xspi_enter_opi_dtr_mmap(struct stm32_xspidev_s *priv)
+{
+  uint32_t regval;
+
+  /* Exit current SPI mmap mode if active */
+
+  if (priv->memmap)
+    {
+      xspi_abort(priv);
+      xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
+      regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+      regval &= ~XSPI_CR_FMODE_MASK;
+      xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+      xspi_putreg(priv,
+                   XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+                   XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+                   STM32_XSPI_FCR_OFFSET);
+      priv->memmap = false;
+    }
+
+  /* Step 1: Configure flash dummy cycles for OPI.
+   * CR2@0x300 = 0x07 → 6 dummy cycles (for both STR and DTR OPI reads).
+   */
+
+  xspi_spi_write_enable(priv);
+  xspi_spi_write_cfg2(priv, 0x00000300, 0x07);
+
+  /* Step 2: Enable SOPI mode (STR OPI, CR2 addr 0x000 = 0x01).
+   * OPI STR is simpler than DTR — eliminates all DTR timing issues.
+   * At 100MHz with 8 lines = 100 MB/s (10x faster than SPI 1-1-1).
+   */
+
+  xspi_spi_write_enable(priv);
+  xspi_spi_write_cfg2(priv, 0x00000000, 0x01);
+
+  /* Wait for flash to complete mode transition */
+
+  up_mdelay(40);
+
+  /* Step 3: Reconfigure XSPI controller for OPI STR */
+
+  xspi_abort(priv);
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~XSPI_CR_EN;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
+  /* DCR1: Standard memory type for OPI STR (NOT Macronix!).
+   * ST BSP uses MTYP=STANDARD for STR, MACRONIX only for DTR.
+   * With Standard mode, IR contains the full 16-bit instruction.
+   */
+
+  regval = xspi_getreg(priv, STM32_XSPI_DCR1_OFFSET);
+  regval &= ~(XSPI_DCR1_CKMODE | XSPI_DCR1_MTYP_MASK);
+  /* MTYP=0 (Standard) is default after clearing */
+  xspi_putreg(priv, regval, STM32_XSPI_DCR1_OFFSET);
+
+  /* DCR2: prescaler = 1 → divide by 2 → 100MHz OPI DTR clock.
+   * Conservative start; can try prescaler=0 (200MHz) once verified.
+   */
+
+  regval = xspi_getreg(priv, STM32_XSPI_DCR2_OFFSET);
+  regval &= ~XSPI_DCR2_PRESCALER_MASK;
+  regval |= (1 << XSPI_DCR2_PRESCALER_SHIFT);
+  xspi_putreg(priv, regval, STM32_XSPI_DCR2_OFFSET);
+
+  /* Clear DCR3/DCR4 — no CS boundary or refresh needed for mmap reads */
+
+  xspi_putreg(priv, 0, STM32_XSPI_DCR3_OFFSET);
+  xspi_putreg(priv, 0, STM32_XSPI_DCR4_OFFSET);
+
+  /* Re-enable XSPI */
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval |= XSPI_CR_EN;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
+  xspi_putreg(priv,
+               XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+               XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+               STM32_XSPI_FCR_OFFSET);
+
+  /* Step 4: Configure OPI STR memory-mapped read.
+   *
+   * Program registers directly — the NuttX QSPI API lacks OctoSPI
+   * flags, so we bypass qspi_meminfo_s and set CCR/TCR/IR/WCCR/WTCR/WIR.
+   */
+
+  /* CCR (read config): OPI STR — 8-line instruction, 16-bit,
+   * 8-line address 32-bit, 8-line data. NO DTR flags.
+   * Flash in SOPI mode, command 0xEC13 (OCTA_READ_CMD STR).
+   */
+
+  xspi_putreg(priv,
+               XSPI_CCR_IMODE(CCR_IMODE_OCTAL) |
+               XSPI_CCR_ISIZE_16b |
+               XSPI_CCR_ADMODE(CCR_ADMODE_OCTAL) |
+               XSPI_CCR_ADSIZE_32b |
+               XSPI_CCR_DMODE(CCR_DMODE_OCTAL),
+               STM32_XSPI_CCR_OFFSET);
+
+  /* TCR: 6 dummy cycles (matches flash CR2@0x300=0x07),
+   * SSHIFT for STR sampling, no DHQC (not needed for STR).
+   */
+
+  xspi_putreg(priv,
+               XSPI_TCR_DCYC(6) | XSPI_TCR_SSHIFT,
+               STM32_XSPI_TCR_OFFSET);
+
+  /* IR: OPI STR read command 0xEC13 — with MTYP=STANDARD,
+   * write the full 16-bit instruction value directly.
+   */
+
+  xspi_putreg(priv, 0xEC13, STM32_XSPI_IR_OFFSET);
+
+  /* WCCR (write config): OPI STR for page program */
+
+  xspi_putreg(priv,
+               XSPI_CCR_IMODE(CCR_IMODE_OCTAL) |
+               XSPI_CCR_ISIZE_16b |
+               XSPI_CCR_ADMODE(CCR_ADMODE_OCTAL) |
+               XSPI_CCR_ADSIZE_32b |
+               XSPI_CCR_DMODE(CCR_DMODE_OCTAL),
+               STM32_XSPI_WCCR_OFFSET);
+
+  /* WTCR: no dummy cycles for writes */
+
+  xspi_putreg(priv, 0, STM32_XSPI_WTCR_OFFSET);
+
+  /* WIR: OPI page program command 0x12ED (full 16-bit, Standard mode) */
+
+  xspi_putreg(priv, 0x12ED, STM32_XSPI_WIR_OFFSET);
+
+  /* Set FMODE = memory-mapped, no timeout */
+
+  regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~(XSPI_CR_FMODE_MASK | XSPI_CR_TCEN);
+  regval |= XSPI_CR_FMODE(XSPI_FMODE_MEMMAP);
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  priv->memmap = true;
+}
+
+/****************************************************************************
+ * Name: xspi_exit_opi_dtr_mmap
+ *
+ * Description:
+ *   Exit OPI STR memory-mapped mode, reset flash back to SPI mode, and
+ *   reinitialize the XSPI controller for SPI 1-1-1 operation.
+ *
+ *   Caller must hold priv->lock.
+ ****************************************************************************/
+
+static void xspi_exit_opi_dtr_mmap(struct stm32_xspidev_s *priv)
+{
+  /* Abort memory-mapped mode */
+
+  xspi_abort(priv);
+  xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+
+  uint32_t regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+  regval &= ~XSPI_CR_FMODE_MASK;
+  xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
+
+  xspi_putreg(priv,
+               XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+               XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+               STM32_XSPI_FCR_OFFSET);
+  priv->memmap = false;
+
+  /* Exit OPI STR back to SPI mode using ST BSP approach:
+   * Write Enable (0x06F9) + Write CR2@0x000=0x00 (0x728D) in OPI STR.
+   * This is more reliable than RSTEN+RST which doesn't always work.
+   * MTYP=Standard for OPI STR (full 16-bit instructions).
+   */
+
+  {
+    uint32_t cr;
+
+    xspi_abort(priv);
+    xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+    xspi_putreg(priv,
+                 XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+                 XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+                 STM32_XSPI_FCR_OFFSET);
+
+    /* FMODE = indirect write, keep MTYP=Standard from enter */
+
+    cr = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
+    cr &= ~XSPI_CR_FMODE_MASK;
+    cr |= XSPI_CR_FMODE(XSPI_FMODE_INDWR);
+    xspi_putreg(priv, cr, STM32_XSPI_CR_OFFSET);
+
+    /* Clear TCR dummy cycles for command phase */
+
+    xspi_putreg(priv, XSPI_TCR_SSHIFT, STM32_XSPI_TCR_OFFSET);
+
+    /* Write Enable (0x06F9) in OPI STR — instruction only */
+
+    xspi_putreg(priv,
+                 XSPI_CCR_IMODE(CCR_IMODE_OCTAL) |
+                 XSPI_CCR_ISIZE_16b,
+                 STM32_XSPI_CCR_OFFSET);
+    xspi_putreg(priv, 0x06F9, STM32_XSPI_IR_OFFSET);
+
+    xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+    xspi_putreg(priv, XSPI_FCR_CTCF, STM32_XSPI_FCR_OFFSET);
+
+    /* Write CR2@0x000 = 0x00 (back to SPI mode) via OPI STR.
+     * Command 0x728D (Write CFG2), 4-byte address, 1 byte data.
+     */
+
+    xspi_putreg(priv, 0, STM32_XSPI_DLR_OFFSET);  /* 1 byte */
+
+    xspi_putreg(priv,
+                 XSPI_CCR_IMODE(CCR_IMODE_OCTAL) |
+                 XSPI_CCR_ISIZE_16b |
+                 XSPI_CCR_ADMODE(CCR_ADMODE_OCTAL) |
+                 XSPI_CCR_ADSIZE_32b |
+                 XSPI_CCR_DMODE(CCR_DMODE_OCTAL),
+                 STM32_XSPI_CCR_OFFSET);
+
+    xspi_putreg(priv, 0x728D, STM32_XSPI_IR_OFFSET);
+    xspi_putreg(priv, 0x00000000, STM32_XSPI_AR_OFFSET);
+
+    /* Write the data byte (0x00 = SPI mode) */
+
+    xspi_waitstatusflags(priv, XSPI_SR_FTF, 1);
+    *(volatile uint8_t *)(priv->base + STM32_XSPI_DR_OFFSET) = 0x00;
+
+    xspi_waitstatusflags(priv, XSPI_SR_TCF, 1);
+    xspi_putreg(priv, XSPI_FCR_CTCF, STM32_XSPI_FCR_OFFSET);
+
+    /* Wait for flash to complete mode transition */
+
+    up_mdelay(40);
+
+    xspi_abort(priv);
+    xspi_waitstatusflags(priv, XSPI_SR_BUSY, 0);
+  }
+
+  /* Reinitialize controller for SPI 1-1-1 operation */
+
+  xspi_reinit_spi_mode(priv);
+
+  spiinfo("OPI STR mmap disabled, back to SPI 1-1-1\n");
+}
+
+/****************************************************************************
  * Name: xspi_flash_reset
  *
  * Description:
@@ -1479,10 +1914,13 @@ static void xspi_flash_reset(struct stm32_xspidev_s *priv)
 {
   uint32_t regval;
 
-  /* Disable XSPI first */
+  /* Disable XSPI and clear FMODE.
+   * FSBL leaves FMODE=MEMMAP — if we only clear EN and set it back,
+   * the controller re-enters mmap with stale CCR, causing issues.
+   */
 
   regval = xspi_getreg(priv, STM32_XSPI_CR_OFFSET);
-  regval &= ~XSPI_CR_EN;
+  regval &= ~(XSPI_CR_EN | XSPI_CR_FMODE_MASK);
   xspi_putreg(priv, regval, STM32_XSPI_CR_OFFSET);
 
   /* Configure for OPI DTR mode to send reset commands.
@@ -1701,6 +2139,16 @@ struct qspi_dev_s *stm32_xspi_initialize(int intf)
 
       putreg32(RCC_BUSENR_AHB5EN, STM32_RCC_BUSENSR);
 
+      /* Disable CACHEAXI if left enabled from a previous boot.
+       * CACHEAXI state persists across SWD soft reset (pitfall #33).
+       * Stale CACHEAXI intercepts XSPI2 reads and returns garbage.
+       */
+
+      putreg32(RCC_AHB5ENR_CACHEAXIEN, STM32_RCC_AHB5ENSR);
+      putreg32(0, STM32_CACHEAXI_BASE + 0x00);  /* CR1: disable */
+      while (getreg32(STM32_CACHEAXI_BASE + 0x04) & 1);  /* Wait !BUSY */
+      putreg32(0x12, STM32_CACHEAXI_BASE + 0x0C);  /* FCR: clear flags */
+
       /* Enable GPION clock for XSPI2 pins (may already be on from boot) */
 
       putreg32(RCC_AHB4ENR_GPIONEN, STM32_RCC_AHB4ENSR);
@@ -1890,11 +2338,45 @@ void stm32_xspi_exit_memorymapped(struct qspi_dev_s *dev)
 
 int stm32_xspi_mmap_lock(void)
 {
-  return nxmutex_lock(&g_xspi0dev.lock);
+  int ret;
+
+  ret = nxmutex_lock(&g_xspi0dev.lock);
+  if (ret < 0)
+    {
+      return ret;
+    }
+
+  /* Switch flash to OPI STR and enter fast memory-mapped mode.
+   * NPU reads weights through mmap at 0x70000000+, so this
+   * gives ~100 MB/s vs ~3 MB/s in SPI 1-1-1 mode.
+   */
+
+  xspi_enter_opi_dtr_mmap(&g_xspi0dev);
+  return OK;
 }
 
 void stm32_xspi_mmap_unlock(void)
 {
+  /* Exit OPI STR mmap and reset flash back to SPI mode */
+
+  xspi_exit_opi_dtr_mmap(&g_xspi0dev);
+
+  /* Re-enter SPI memory-mapped mode if a config was saved (for littlefs) */
+
+  if (g_xspi0dev.mmap_saved && !g_xspi0dev.memmap)
+    {
+      struct xspi_xctnspec_s mxctn;
+      xspi_abort(&g_xspi0dev);
+      xspi_waitstatusflags(&g_xspi0dev, XSPI_SR_BUSY, 0);
+      xspi_putreg(&g_xspi0dev,
+                   XSPI_FCR_CTEF | XSPI_FCR_CTCF |
+                   XSPI_FCR_CSMF | XSPI_FCR_CTOF,
+                   STM32_XSPI_FCR_OFFSET);
+      xspi_setupxctnfrommem(&mxctn, &g_xspi0dev.mmap_info);
+      xspi_ccrconfig(&g_xspi0dev, &mxctn, XSPI_FMODE_MEMMAP);
+      g_xspi0dev.memmap = true;
+    }
+
   nxmutex_unlock(&g_xspi0dev.lock);
 }
 
