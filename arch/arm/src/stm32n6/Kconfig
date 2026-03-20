@@ -34,6 +34,54 @@ config ARCH_CHIP_STM32N657X0
 
 endchoice
 
+menu "Clock Configuration"
+
+choice
+	prompt "CPU Frequency"
+	default STM32N6_CPU_800MHZ
+
+config STM32N6_CPU_600MHZ
+	bool "600 MHz (VOS SCALE1, no SMPS overdrive)"
+	---help---
+		Run CPU at 600 MHz. Works with default voltage scaling
+		(VOS SCALE1). Does not require SMPS overdrive on PB12.
+		PLL1: HSI(64) / 4 * 75 = 1200 MHz VCO, IC1 = VCO/2 = 600 MHz.
+
+config STM32N6_CPU_800MHZ
+	bool "800 MHz (VOS SCALE0, SMPS overdrive required)"
+	---help---
+		Run CPU at 800 MHz. Requires SMPS overdrive (PB12 HIGH)
+		and VOS SCALE0. Maximum performance.
+		PLL1: HSI(64) / 2 * 25 = 800 MHz VCO, IC1 = VCO/1 = 800 MHz.
+
+endchoice
+
+if STM32N6_NPU
+
+choice
+	prompt "NPU Clock Speed"
+	default STM32N6_NPU_1GHZ if STM32N6_CPU_800MHZ
+	default STM32N6_NPU_900MHZ
+
+config STM32N6_NPU_1GHZ
+	bool "1 GHz core / 900 MHz SRAM (max performance)"
+	depends on STM32N6_CPU_800MHZ
+	---help---
+		NPU core at 1 GHz (PLL2), NPU SRAM at 900 MHz (PLL3).
+		Requires 800 MHz CPU mode (SMPS overdrive provides voltage).
+
+config STM32N6_NPU_900MHZ
+	bool "900 MHz core / 800 MHz SRAM (reduced power)"
+	---help---
+		NPU core at 900 MHz (PLL2), NPU SRAM at 800 MHz (PLL3).
+		Works with both 600 MHz and 800 MHz CPU modes.
+
+endchoice
+
+endif # STM32N6_NPU
+
+endmenu
+
 menu "STM32N6 Peripheral Selection"
 
 config STM32N6_TIM1

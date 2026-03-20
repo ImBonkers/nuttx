@@ -192,35 +192,19 @@ static void stm32_configure_pll2_pll3(void)
   volatile int32_t timeout;
   uint32_t regval;
 
-  /* SMPS overdrive: set PB12 HIGH before enabling high-frequency PLLs.
-   * The external SMPS on PB12 controls core voltage — overdrive is
-   * required for NPU at 1000 MHz (IC6) and NPU SRAM at 900 MHz (IC11).
-   * The x-cube BSP does BSP_SMPS_Init(SMPS_VOLTAGE_OVERDRIVE) before
-   * any PLL configuration.  GPIOB clock was already enabled by
-   * rcc_enableahb4() when called from stm32_rcc_enableperipherals()
-   * in the full config path.  In the FSBL early-return path, GPIOB
-   * is already clocked by the FSBL.  Enable it defensively here.
+  /* SMPS overdrive + VOS SCALE0 for high-frequency operation.
+   * Required when CPU is at 800 MHz or NPU at 1 GHz.
+   * At 600 MHz CPU + 900 MHz NPU, SCALE1 (default) is sufficient
+   * but SMPS overdrive is still needed for NPU > 800 MHz.
    */
 
-  putreg32(RCC_AHB4ENR_GPIOBEN, STM32_RCC_AHB4ENSR);  /* GPIOB clock */
+#ifdef CONFIG_STM32N6_CPU_800MHZ
+  putreg32(RCC_AHB4ENR_GPIOBEN, STM32_RCC_AHB4ENSR);
 
-  /* Configure PB12 as push-pull output, very high speed.
-   * GPIOB base (Secure) = 0x56020400.
-   * MODER[25:24] = 01 (output), OTYPER[12] = 0 (push-pull),
-   * OSPEEDR[25:24] = 11 (very high), BSRR[12] = 1 (set HIGH).
-   */
-
-  modifyreg32(GPIOB_BASE_S + 0x00, (3 << 24), (1 << 24));  /* MODER: output */
-  modifyreg32(GPIOB_BASE_S + 0x04, (1 << 12), 0);          /* OTYPER: PP */
-  modifyreg32(GPIOB_BASE_S + 0x08, (3 << 24), (3 << 24));  /* OSPEEDR: VH */
-  putreg32((1 << 12), GPIOB_BASE_S + 0x18);                 /* BSRR: set */
-
-  /* Set VOS to SCALE0 (highest performance, required for 800 MHz CPU and
-   * 1000 MHz NPU).  No fixed SMPS ramp delay needed — the VOSRDY poll
-   * provides the feedback: the regulator won't assert VOSRDY until the
-   * voltage has stabilized at the SCALE0 level, which implicitly waits
-   * for the SMPS overdrive ramp to complete.
-   */
+  modifyreg32(GPIOB_BASE_S + 0x00, (3 << 24), (1 << 24));
+  modifyreg32(GPIOB_BASE_S + 0x04, (1 << 12), 0);
+  modifyreg32(GPIOB_BASE_S + 0x08, (3 << 24), (3 << 24));
+  putreg32((1 << 12), GPIOB_BASE_S + 0x18);
 
   modifyreg32(PWR_VOSCR, 0, PWR_VOSCR_VOS);
 
@@ -231,8 +215,9 @@ static void stm32_configure_pll2_pll3(void)
           break;
         }
     }
+#endif
 
-  /* --- PLL2: 1000 MHz for NPU core (IC6) --- */
+  /* --- PLL2: NPU core clock (IC6) --- */
 
   /* Disable IC6 before changing its source */
 
@@ -250,14 +235,11 @@ static void stm32_configure_pll2_pll3(void)
         }
     }
 
-  /* Configure PLL2CFGR1: source=HSI, M=8, N=125
-   *   VCO_in  = 64 MHz / 8 = 8 MHz
-   *   VCO_out = 8 MHz * 125 = 1000 MHz
-   */
+  /* Configure PLL2CFGR1: source=HSI, M and N from board.h */
 
   regval = (RCC_PLL1CFGR1_SEL_HSI)
-         | (8 << RCC_PLL1CFGR1_DIVM_SHIFT)
-         | (125 << RCC_PLL1CFGR1_DIVN_SHIFT);
+         | (STM32_PLL2_M << RCC_PLL1CFGR1_DIVM_SHIFT)
+         | (STM32_PLL2_N << RCC_PLL1CFGR1_DIVN_SHIFT);
   putreg32(regval, STM32_RCC_PLL2CFGR1);
 
   /* Configure PLL2CFGR3: disable SS, PDIV1=1, PDIV2=1, enable post-div */
@@ -298,24 +280,19 @@ static void stm32_configure_pll2_pll3(void)
         }
     }
 
-  /* Configure PLL3CFGR1: source=HSI, M=8, N=225
-   *   VCO_in  = 64 MHz / 8 = 8 MHz
-   *   VCO_out = 8 MHz * 225 = 1800 MHz
-   */
+  /* Configure PLL3CFGR1: source=HSI, M and N from board.h */
 
   regval = (RCC_PLL1CFGR1_SEL_HSI)
-         | (8 << RCC_PLL1CFGR1_DIVM_SHIFT)
-         | (225 << RCC_PLL1CFGR1_DIVN_SHIFT);
+         | (STM32_PLL3_M << RCC_PLL1CFGR1_DIVM_SHIFT)
+         | (STM32_PLL3_N << RCC_PLL1CFGR1_DIVN_SHIFT);
   putreg32(regval, STM32_RCC_PLL3CFGR1);
 
-  /* Configure PLL3CFGR3: disable SS, PDIV1=1, PDIV2=2, enable post-div
-   *   PLL3 output = VCO / PDIV2 = 1800 / 2 = 900 MHz
-   */
+  /* Configure PLL3CFGR3: disable SS, PDIV1=1, PDIV2 from board.h */
 
   regval = RCC_PLL1CFGR3_MODSSDIS
          | RCC_PLL1CFGR3_PDIVEN
          | (1 << RCC_PLL1CFGR3_PDIV1_SHIFT)
-         | (2 << RCC_PLL1CFGR3_PDIV2_SHIFT);
+         | (STM32_PLL3_PDIV2 << RCC_PLL1CFGR3_PDIV2_SHIFT);
   putreg32(regval, STM32_RCC_PLL3CFGR3);
 
   /* Enable PLL3 */
@@ -439,14 +416,11 @@ void stm32_stdclockconfig(void)
         }
     }
 
-  /* 3. Configure PLL1CFGR1: source=HSI, M=2, N=25
-   *    VCO_in  = 64 MHz / 2 = 32 MHz
-   *    VCO_out = 32 MHz * 25 = 800 MHz
-   */
+  /* 3. Configure PLL1CFGR1: source=HSI, M and N from board.h */
 
   regval = (RCC_PLL1CFGR1_SEL_HSI)
-         | (2 << RCC_PLL1CFGR1_DIVM_SHIFT)
-         | (25 << RCC_PLL1CFGR1_DIVN_SHIFT);
+         | (STM32_PLL1_M << RCC_PLL1CFGR1_DIVM_SHIFT)
+         | (STM32_PLL1_N << RCC_PLL1CFGR1_DIVN_SHIFT);
   putreg32(regval, STM32_RCC_PLL1CFGR1);
 
   /* 4. Configure PLL1CFGR3: disable SS, PDIV1=1, PDIV2=1, enable post-div */
@@ -470,23 +444,28 @@ void stm32_stdclockconfig(void)
     }
 
   /* 6. Configure IC dividers (source=PLL1, register value = divider - 1)
-   *    IC1  = PLL1 / 1  = 800 MHz  (CPU)
-   *    IC2  = PLL1 / 2  = 400 MHz  (SYSCLK)
-   *    IC3  = PLL1 / 4  = 200 MHz  (XSPI2 kernel clock)
-   *    IC6  = PLL1 / 3  = 267 MHz  (AHB — will be re-sourced if NPU)
-   *    IC11 = PLL1 / 2  = 400 MHz  (APB — will be re-sourced if NPU)
+   *    IC1  = VCO / IC1_DIV  -> CPU clock (from board.h)
+   *    IC2  = VCO / (IC1_DIV*2) -> SYSCLK (half of CPU)
+   *    IC3  = VCO / (IC1_DIV*4) -> XSPI2 kernel clock
+   *    IC6  = VCO / (IC1_DIV*3) -> AHB (re-sourced by NPU if enabled)
+   *    IC11 = VCO / (IC1_DIV*2) -> APB (re-sourced by NPU if enabled)
    */
 
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (0 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC1CFGR);   /* IC1: 800/1 = 800 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (1 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC2CFGR);   /* IC2: 800/2 = 400 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (3 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC3CFGR);   /* IC3: 800/4 = 200 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (2 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC6CFGR);   /* IC6: 800/3 = 267 MHz */
-  putreg32(RCC_ICCFGR_SEL_PLL1 | (1 << RCC_ICCFGR_INT_SHIFT),
-           STM32_RCC_IC11CFGR);  /* IC11: 800/2 = 400 MHz */
+  putreg32(RCC_ICCFGR_SEL_PLL1
+         | ((STM32_PLL1_IC1_DIV - 1) << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC1CFGR);
+  putreg32(RCC_ICCFGR_SEL_PLL1
+         | ((STM32_PLL1_IC1_DIV * 2 - 1) << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC2CFGR);
+  putreg32(RCC_ICCFGR_SEL_PLL1
+         | ((STM32_PLL1_IC1_DIV * 4 - 1) << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC3CFGR);
+  putreg32(RCC_ICCFGR_SEL_PLL1
+         | ((STM32_PLL1_IC1_DIV * 3 - 1) << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC6CFGR);
+  putreg32(RCC_ICCFGR_SEL_PLL1
+         | ((STM32_PLL1_IC1_DIV * 2 - 1) << RCC_ICCFGR_INT_SHIFT),
+           STM32_RCC_IC11CFGR);
 
   /* 7. Enable IC1, IC2, IC3, IC6, IC11 */
 

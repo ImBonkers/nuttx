@@ -38,45 +38,62 @@
 
 /* Clocking *****************************************************************/
 
-/* PLL1 is configured for 800 MHz CPU clock (VOS SCALE0 + SMPS overdrive):
- *
- *   HSI 64 MHz -> PLL1 (M=2, N=25, P1=1, P2=1) -> 800 MHz
- *     IC1  /1  = 800 MHz  -> CPU (CPUSW = IC1)
- *     IC2  /2  = 400 MHz  \
- *     IC6  /3  = 267 MHz   > System bus (SYSSW)
- *     IC11 /2  = 400 MHz  /
- *     HPRE /2  = 200 MHz  -> HCLK
- *     PPRE1 /1 = 200 MHz  -> APB1 (PCLK1)
- *     PPRE2 /1 = 200 MHz  -> APB2 (PCLK2)
- *
- * With CONFIG_STM32N6_NPU, PLL2/PLL3 are also configured:
- *   HSI 64 MHz -> PLL2 (M=8, N=125) -> 1000 MHz
- *     IC6  /1  = 1000 MHz -> NPU core (replaces PLL1/3)
- *   HSI 64 MHz -> PLL3 (M=8, N=225, P2=2) -> 900 MHz
- *     IC11 /1  = 900 MHz  -> NPU SRAM (replaces PLL1/2)
- */
+/* Clock source */
 
 #define STM32_HSI_FREQUENCY     64000000ul
-#define STM32_CPUCLK_FREQUENCY  800000000ul  /* IC1 = PLL1/1 = 800 MHz */
-#define STM32_SYSCLK_FREQUENCY  400000000ul  /* IC2 = PLL1/2 = 400 MHz */
-#define STM32_HCLK_FREQUENCY    200000000ul  /* SYSCLK / HPRE(2) = 200 MHz */
-#define STM32_PCLK1_FREQUENCY   200000000ul  /* HCLK / PPRE1(1) = 200 MHz */
-#define STM32_PCLK2_FREQUENCY   200000000ul  /* HCLK / PPRE2(1) = 200 MHz */
 
-/* PLL2/PLL3 frequencies for NPU support */
-
-#define STM32_PLL2_FREQUENCY      1000000000ul /* PLL2 VCO = 1000 MHz */
-#define STM32_PLL3_FREQUENCY       900000000ul /* PLL3 output = 900 MHz */
-#define STM32_NPU_CLK_FREQUENCY   1000000000ul /* IC6 = PLL2/1 = 1000 MHz */
-#define STM32_NPUSRAM_FREQUENCY    900000000ul /* IC11 = PLL3/1 = 900 MHz */
-
-/* Timer input clock.  On STM32N6, RCC_CFGR2.TIMPRE[25:24] selects the
- * timer group prescaler.  With TIMPRE=0 (default), timer clock = SYSCLK
- * (not HCLK or PCLK).  TIMPRE=1 would give SYSCLK/2, etc.
+/* CPU clock — selected via Kconfig (CONFIG_STM32N6_CPU_800MHZ / 600MHZ)
+ *
+ * 800 MHz: PLL1 HSI/2 * 25 = 800 MHz VCO, IC1 = VCO/1
+ *          Requires SMPS overdrive (PB12) + VOS SCALE0.
+ *
+ * 600 MHz: PLL1 HSI/4 * 75 = 1200 MHz VCO, IC1 = VCO/2
+ *          Works with default VOS SCALE1, no SMPS needed.
  */
 
-#define STM32_APB1_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY  /* 400 MHz */
-#define STM32_APB2_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY  /* 400 MHz */
+#ifdef CONFIG_STM32N6_CPU_800MHZ
+#  define STM32_PLL1_M              2
+#  define STM32_PLL1_N              25
+#  define STM32_PLL1_IC1_DIV        1
+#  define STM32_CPUCLK_FREQUENCY    800000000ul
+#else /* CONFIG_STM32N6_CPU_600MHZ */
+#  define STM32_PLL1_M              4
+#  define STM32_PLL1_N              75
+#  define STM32_PLL1_IC1_DIV        2
+#  define STM32_CPUCLK_FREQUENCY    600000000ul
+#endif
+
+/* Derived bus clocks (same ratio for both CPU speeds) */
+
+#define STM32_SYSCLK_FREQUENCY  (STM32_CPUCLK_FREQUENCY / 2)
+#define STM32_HCLK_FREQUENCY    (STM32_CPUCLK_FREQUENCY / 4)
+#define STM32_PCLK1_FREQUENCY   STM32_HCLK_FREQUENCY
+#define STM32_PCLK2_FREQUENCY   STM32_HCLK_FREQUENCY
+
+/* NPU clocks — PLL2 (core) + PLL3 (SRAM), selected via Kconfig */
+
+#ifdef CONFIG_STM32N6_NPU_1GHZ
+#  define STM32_PLL2_M              8
+#  define STM32_PLL2_N              125
+#  define STM32_PLL3_M              8
+#  define STM32_PLL3_N              225
+#  define STM32_PLL3_PDIV2          2
+#  define STM32_NPU_CLK_FREQUENCY   1000000000ul
+#  define STM32_NPUSRAM_FREQUENCY    900000000ul
+#elif defined(CONFIG_STM32N6_NPU_900MHZ)
+#  define STM32_PLL2_M              8
+#  define STM32_PLL2_N              112
+#  define STM32_PLL3_M              8
+#  define STM32_PLL3_N              200
+#  define STM32_PLL3_PDIV2          2
+#  define STM32_NPU_CLK_FREQUENCY    900000000ul
+#  define STM32_NPUSRAM_FREQUENCY    800000000ul
+#endif
+
+/* Timer input clock = SYSCLK (TIMPRE=0 default) */
+
+#define STM32_APB1_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY
+#define STM32_APB2_TIM_FREQUENCY STM32_SYSCLK_FREQUENCY
 
 /* ADC kernel clock = HSI (64 MHz) via RCC_CCIPR1 ADC12SEL */
 
@@ -85,8 +102,6 @@
 /* LSI oscillator frequency (nominal 32 kHz) */
 
 #define STM32_LSI_FREQUENCY 32000
-
-#define BOARD_LOOPSPERMSEC      75000
 
 /* LED definitions **********************************************************/
 
@@ -237,7 +252,7 @@
 
 /* XSPI2 kernel clock frequency: IC3 = PLL1/6 = 200MHz */
 
-#define STM32_XSPI_FREQUENCY  200000000ul
+#define STM32_XSPI_FREQUENCY  (STM32_CPUCLK_FREQUENCY / 4)
 
 /****************************************************************************
  * Public Data
