@@ -47,6 +47,7 @@
 #if defined(CONFIG_STM32N6_ADC1_DMA) || defined(CONFIG_STM32N6_ADC2_DMA)
 #  include <nuttx/cache.h>
 #  include "stm32_dma.h"
+#  include "stm32_dcache.h"
 #endif
 
 #ifdef CONFIG_STM32N6_ADC
@@ -480,11 +481,11 @@ static int adc_ioctl(struct adc_dev_s *dev, int cmd, unsigned long arg)
               size_t nbytes_aligned = (nbytes + 31) & ~31u;
               int ret;
 
-              /* Pre-invalidate DMA buffer */
+              /* Clean+invalidate D-cache before DMA (set/way — MVA ops
+               * fail on M55 Secure).
+               */
 
-              up_invalidate_dcache(
-                (uintptr_t)priv->dmabuf,
-                (uintptr_t)priv->dmabuf + nbytes_aligned);
+              stm32_dcache_clean_invalidate();
 
               /* Build DMA config: ADC DR → dmabuf (P2M, word width) */
 
@@ -537,11 +538,9 @@ static int adc_ioctl(struct adc_dev_s *dev, int cmd, unsigned long arg)
                 }
               else
                 {
-                  /* Invalidate and deliver results */
+                  /* Clean+invalidate D-cache after DMA */
 
-                  up_invalidate_dcache(
-                    (uintptr_t)priv->dmabuf,
-                    (uintptr_t)priv->dmabuf + nbytes_aligned);
+                  stm32_dcache_clean_invalidate();
 
                   for (i = 0; i < priv->nchannels; i++)
                     {

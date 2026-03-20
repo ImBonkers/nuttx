@@ -58,6 +58,7 @@
 #ifdef CONFIG_STM32N6_XSPI2_DMA
 #  include <nuttx/cache.h>
 #  include "stm32_dma.h"
+#  include "stm32_dcache.h"
 #endif
 
 #ifdef CONFIG_STM32N6_XSPI
@@ -873,26 +874,7 @@ static int xspi_receive_dma(struct stm32_xspidev_s *priv,
    * then invalidates.  ~2μs for 32KB cache.
    */
 
-  __asm volatile ("dsb sy");
-  {
-    uint32_t ccsidr = getreg32(0xe000ed80);
-    uint32_t sets = (ccsidr >> 13) & 0x7fff;
-    uint32_t sshift = ((ccsidr & 7) + 2) + 2;
-    uint32_t ways = (ccsidr >> 3) & 0x3ff;
-    uint32_t wshift = __builtin_clz(ways) & 0x1f;
-    do
-      {
-        int32_t w = ways;
-        do
-          {
-            putreg32((w << wshift) | (sets << sshift), 0xe000ef74);
-          }
-        while (w--);
-      }
-    while (sets--);
-  }
-  __asm volatile ("dsb sy");
-  __asm volatile ("isb sy");
+  stm32_dcache_clean_invalidate();
 
   /* Build RX DMA config: XSPI DR (peripheral) → aligned rxdma_buf */
 
@@ -956,26 +938,7 @@ static int xspi_receive_dma(struct stm32_xspidev_s *priv,
 
   /* Clean+invalidate entire D-cache by set/way after DMA */
 
-  __asm volatile ("dsb sy");
-  {
-    uint32_t ccsidr = getreg32(0xe000ed80);
-    uint32_t sets = (ccsidr >> 13) & 0x7fff;
-    uint32_t sshift = ((ccsidr & 7) + 2) + 2;
-    uint32_t ways = (ccsidr >> 3) & 0x3ff;
-    uint32_t wshift = __builtin_clz(ways) & 0x1f;
-    do
-      {
-        int32_t w = ways;
-        do
-          {
-            putreg32((w << wshift) | (sets << sshift), 0xe000ef74);
-          }
-        while (w--);
-      }
-    while (sets--);
-  }
-  __asm volatile ("dsb sy");
-  __asm volatile ("isb sy");
+  stm32_dcache_clean_invalidate();
   memcpy(xctn->buffer, priv->rxdma_buf, nbytes);
 
   return OK;

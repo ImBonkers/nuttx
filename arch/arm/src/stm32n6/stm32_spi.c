@@ -78,6 +78,7 @@
 #  include <nuttx/semaphore.h>
 #  include <nuttx/cache.h>
 #  include "stm32_dma.h"
+#  include "stm32_dcache.h"
 #endif
 
 #if defined(CONFIG_STM32N6_SPI1) || defined(CONFIG_STM32N6_SPI2) || \
@@ -1721,12 +1722,11 @@ static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
                    | GPDMA_CXTR2_DREQ;
   txcfg.ntransfers = nbytes;
 
-  /* Cache maintenance on aligned buffers — no DCCIMVAC edge issue */
+  /* Clean+invalidate D-cache before DMA (set/way — MVA ops fail on
+   * M55 Secure).  Handles both TX flush and RX pre-invalidate.
+   */
 
-  up_clean_dcache((uintptr_t)priv->txdma_buf,
-                  (uintptr_t)priv->txdma_buf + nbytes_aligned);
-  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
-                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
+  stm32_dcache_clean_invalidate();
 
   /* Disable SPI DMA enables first, then SPE, then clear all flags.
    * DMA channels are stopped/reconfigured inside stm32_dmasetup below.
@@ -1786,10 +1786,9 @@ static void spi_exchange_dma(struct spi_dev_s *dev, const void *txbuffer,
   spi_modifyreg(priv, STM32_SPI_CFG1_OFFSET,
                 SPI_CFG1_RXDMAEN | SPI_CFG1_TXDMAEN, 0);
 
-  /* Invalidate RX aligned buffer and copy to caller's buffer */
+  /* Clean+invalidate D-cache after DMA RX */
 
-  up_invalidate_dcache((uintptr_t)priv->rxdma_buf,
-                       (uintptr_t)priv->rxdma_buf + nbytes_aligned);
+  stm32_dcache_clean_invalidate();
 
   if (rxbuffer != NULL)
     {
