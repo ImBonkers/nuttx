@@ -95,10 +95,16 @@ bool stm32_pwr_enablebkp(bool writable)
 
 void stm32_pwr_enablevddio(void)
 {
-  /* Enable VddIO2 and VddIO3 (for GPIOE used by USART1) */
+  /* Enable VddIO2 and VddIO3 (for GPIOE used by USART1).
+   * Also set voltage range to 1.8V for both — the Nucleo board runs
+   * VDDIO2/3 at 1.8V. Without VRSEL, IO pads operate in "degraded mode"
+   * (assuming 3.3V) and cannot reach maximum XSPI speed for OPI DTR.
+   * SVMCR3 bits: 25=VDDIO2VRSEL, 26=VDDIO3VRSEL (1=1.8V, 0=3.3V).
+   */
 
   modifyreg32(STM32_PWR_SVMCR3, 0,
-              PWR_SVMCR3_VDDIO2SV | PWR_SVMCR3_VDDIO3SV);
+              PWR_SVMCR3_VDDIO2SV | PWR_SVMCR3_VDDIO3SV |
+              (1 << 25) | (1 << 26));
 
   /* Enable VddIO4 (for XSPI2) */
 
