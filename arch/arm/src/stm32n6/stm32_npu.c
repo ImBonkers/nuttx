@@ -553,8 +553,8 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
 
               ebs[i].end_epoch_block(&ebs[i]);
 
-                syslog(LOG_INFO, "NPU: ep%d %ldms\n", i,
-                       (long)TICK2MSEC(clock_systime_ticks() -
+                syslog(LOG_INFO, "NPU: ep%d %ldus\n", i,
+                       (long)TICK2USEC(clock_systime_ticks() -
                                        ep_start));
               }
             }
