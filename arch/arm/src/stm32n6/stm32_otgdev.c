@@ -484,6 +484,34 @@ struct stm32_ep_s
   uint8_t                zlp:1;        /* 1: Transmit a zero-length-packet (IN EPs only) */
 };
 
+#ifdef CONFIG_STM32N6_OTG_DMA
+/* DMA buffers and descriptors — placed in a SEPARATE static allocation
+ * so that the MPU non-cacheable region does not share cache lines with
+ * the cacheable g_otghsdev struct.  Aligned to 64 bytes to guarantee
+ * no cache line straddling on Cortex-M55 (32-byte D-cache lines).
+ */
+
+struct stm32_otg_dmadesc_s
+{
+  volatile uint32_t status;
+  volatile uint32_t buf;
+};
+
+struct stm32_otg_dma_s
+{
+  uint8_t                     setup_dma_buf[32] aligned_data(32);
+  uint8_t                     ep0in_dma_buf[64] aligned_data(32);
+  uint8_t                     ep0out_dma_buf[CONFIG_USBDEV_SETUP_MAXDATASIZE]
+                                             aligned_data(32);
+  struct stm32_otg_dmadesc_s  setup_desc aligned_data(32);
+  struct stm32_otg_dmadesc_s  ctrl_in_desc aligned_data(32);
+  struct stm32_otg_dmadesc_s  in_desc[STM32_NENDPOINTS] aligned_data(32);
+  struct stm32_otg_dmadesc_s  out_desc[STM32_NENDPOINTS] aligned_data(32);
+};
+
+static struct stm32_otg_dma_s g_otg_dma aligned_data(64);
+#endif
+
 /* This structure retains the state of the USB device controller */
 
 struct stm32_usbdev_s
@@ -538,30 +566,11 @@ struct stm32_usbdev_s
   uint16_t                ep0datlen;
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-  /* DMA-aligned buffers for EP0 SETUP and data reception.
-   * DWC2 internal DMA requires DWORD-aligned buffers; cache
-   * coherency requires 32-byte alignment.
+  /* Pointer to DMA buffers/descriptors — allocated separately to avoid
+   * cache line straddling between cacheable and non-cacheable MPU regions.
    */
 
-  uint8_t                 setup_dma_buf[32] aligned_data(32);
-  uint8_t                 ep0in_dma_buf[64] aligned_data(32);
-  uint8_t                 ep0out_dma_buf[CONFIG_USBDEV_SETUP_MAXDATASIZE]
-                                         aligned_data(32);
-
-  /* Descriptor DMA: one descriptor per endpoint direction.
-   * Each descriptor is {status, buf} = 8 bytes, 32-byte aligned
-   * for cache line coherency.
-   */
-
-  struct
-    {
-      volatile uint32_t status;
-      volatile uint32_t buf;
-    }
-  setup_desc aligned_data(32),
-  ctrl_in_desc aligned_data(32),
-  in_desc[STM32_NENDPOINTS] aligned_data(32),
-  out_desc[STM32_NENDPOINTS] aligned_data(32);
+  struct stm32_otg_dma_s  *dma;
 #endif
 
   /* The endpoint lists */
@@ -1115,11 +1124,13 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
    * 24 bytes = 3 SETUP packets × 8 bytes each.
    */
 
-  priv->setup_desc.status = OTG_DMADESC_BS_HBUSY | OTG_DMADESC_SR |
+  priv->dma->setup_desc.status = OTG_DMADESC_BS_HBUSY | OTG_DMADESC_SR |
                             OTG_DMADESC_IOC | OTG_DMADESC_L | 24;
-  priv->setup_desc.buf = (uint32_t)(uintptr_t)priv->setup_dma_buf;
-  /* DMA buffers in non-cacheable MPU region — no flush needed */
-  stm32_putreg((uint32_t)(uintptr_t)&priv->setup_desc,
+  priv->dma->setup_desc.buf = (uint32_t)(uintptr_t)priv->dma->setup_dma_buf;
+  up_clean_dcache((uintptr_t)&priv->dma->setup_desc,
+                  (uintptr_t)&priv->dma->setup_desc + sizeof(priv->dma->setup_desc));
+  __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+  stm32_putreg((uint32_t)(uintptr_t)&priv->dma->setup_desc,
                STM32_OTG_DOEPDMA(0));
 #endif
 
@@ -1276,21 +1287,30 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
 
     if (epno == 0 && nbytes > 0 && nbytes <= 64)
       {
-        memcpy(priv->ep0in_dma_buf, buf, nbytes);
-        dmabuf = priv->ep0in_dma_buf;
+        memcpy(priv->dma->ep0in_dma_buf, buf, nbytes);
+        dmabuf = priv->dma->ep0in_dma_buf;
       }
     else
       {
         dmabuf = buf;
       }
 
-    priv->in_desc[epno].status = OTG_DMADESC_BS_HBUSY |
+    priv->dma->in_desc[epno].status = OTG_DMADESC_BS_HBUSY |
                                  OTG_DMADESC_IOC | OTG_DMADESC_L |
                                  OTG_DMADESC_SP |
                                  (nbytes & OTG_DMADESC_BYTES_MASK);
-    priv->in_desc[epno].buf = (uint32_t)(uintptr_t)dmabuf;
-    /* DMA buffers in non-cacheable MPU region — no flush needed */
-    stm32_putreg((uint32_t)(uintptr_t)&priv->in_desc[epno],
+    priv->dma->in_desc[epno].buf = (uint32_t)(uintptr_t)dmabuf;
+    /* Clean data buffer + descriptor so DMA reads current data */
+
+    if (nbytes > 0)
+      {
+        up_clean_dcache((uintptr_t)dmabuf, (uintptr_t)dmabuf + nbytes);
+      }
+
+    up_clean_dcache((uintptr_t)&priv->dma->in_desc[epno],
+                    (uintptr_t)&priv->dma->in_desc[epno] + sizeof(priv->dma->in_desc[0]));
+    __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+    stm32_putreg((uint32_t)(uintptr_t)&priv->dma->in_desc[epno],
                  STM32_OTG_DIEPDMA(epno));
   }
 #endif
@@ -1301,17 +1321,15 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
   regval |= (OTG_DIEPCTL_CNAK | OTG_DIEPCTL_EPENA);
   stm32_putreg(regval, STM32_OTG_DIEPCTL(privep->epphy));
 
-  /* Write data to TxFIFO.  In DMA mode with DMAEN set, the core
-   * reads from DIEPDMA instead, but we still need the TxFIFO write
-   * as fallback (DMAEN may be disabled for testing).
-   */
-
-  /* Always write to TxFIFO.  With descriptor DMA, the core may
-   * still need TxFIFO data for IN transfers on this DWC2 v4.11a.
+#ifndef CONFIG_STM32N6_OTG_DMA
+  /* Write data to TxFIFO (PIO mode only).  In descriptor DMA mode,
+   * the DWC2 reads data from the DMA buffer via DIEPDMA — writing
+   * to the TxFIFO would conflict with the DMA engine.
    */
 
   stm32_txfifo_write(privep, buf, nbytes);
-  __asm__ __volatile__ ("dsb 15" : : : "memory");
+  __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+#endif
 }
 
 /****************************************************************************
@@ -1937,12 +1955,14 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
         uint8_t *dest = privreq->req.buf + privreq->req.xfrd;
         int epno = privep->epphy;
 
-        priv->out_desc[epno].status = OTG_DMADESC_BS_HBUSY |
+        priv->dma->out_desc[epno].status = OTG_DMADESC_BS_HBUSY |
                                       OTG_DMADESC_IOC | OTG_DMADESC_L |
                                       (xfrsize & OTG_DMADESC_BYTES_MASK);
-        priv->out_desc[epno].buf = (uint32_t)(uintptr_t)dest;
-        /* DMA buffers in non-cacheable MPU region — no flush needed */
-        stm32_putreg((uint32_t)(uintptr_t)&priv->out_desc[epno],
+        priv->dma->out_desc[epno].buf = (uint32_t)(uintptr_t)dest;
+        up_clean_dcache((uintptr_t)&priv->dma->out_desc[epno],
+                        (uintptr_t)&priv->dma->out_desc[epno] + sizeof(priv->dma->out_desc[0]));
+        __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+        stm32_putreg((uint32_t)(uintptr_t)&priv->dma->out_desc[epno],
                      STM32_OTG_DOEPDMA(epno));
       }
 #endif
@@ -2943,8 +2963,13 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
 
                     /* Read remaining bytes from descriptor status */
 
-                    /* DMA buffers in non-cacheable MPU region — no flush needed */
-                    xfrsiz_remain = priv->out_desc[epno].status &
+                    /* Invalidate descriptor + receive buffer after DMA */
+
+                    up_invalidate_dcache(
+                      (uintptr_t)&priv->dma->out_desc[epno],
+                      (uintptr_t)&priv->dma->out_desc[epno] +
+                      sizeof(priv->dma->out_desc[0]));
+                    xfrsiz_remain = priv->dma->out_desc[epno].status &
                                     OTG_DMADESC_BYTES_MASK;
 
                     xfrsiz_orig =
@@ -2954,6 +2979,13 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                       privep->ep.maxpacket;
 
                     xfrd = xfrsiz_orig - xfrsiz_remain;
+                    if (xfrd > 0)
+                      {
+                        up_invalidate_dcache(
+                          (uintptr_t)(privreq->req.buf + privreq->req.xfrd),
+                          (uintptr_t)(privreq->req.buf + privreq->req.xfrd + xfrd));
+                      }
+
                     privreq->req.xfrd += xfrd;
                   }
               }
@@ -2997,8 +3029,10 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                 {
                   uint16_t datlen;
 
-                  /* DMA buffers in non-cacheable MPU region — no flush needed */
-                  memcpy(&priv->ctrlreq, priv->setup_dma_buf,
+                  up_invalidate_dcache(
+                    (uintptr_t)priv->dma->setup_dma_buf,
+                    (uintptr_t)priv->dma->setup_dma_buf + 32);
+                  memcpy(&priv->ctrlreq, priv->dma->setup_dma_buf,
                          USB_SIZEOF_CTRLREQ);
 
                   datlen = GETUINT16(priv->ctrlreq.len);
@@ -3597,7 +3631,7 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
              */
 
             /* DMA buffers in non-cacheable MPU region — no flush needed */
-            memcpy(&priv->ctrlreq, priv->setup_dma_buf,
+            memcpy(&priv->ctrlreq, priv->dma->setup_dma_buf,
                    USB_SIZEOF_CTRLREQ);
 #endif
 
@@ -5426,6 +5460,14 @@ static void stm32_swinitialize(struct stm32_usbdev_s *priv)
 
   memset(priv, 0, sizeof(struct stm32_usbdev_s));
 
+#ifdef CONFIG_STM32N6_OTG_DMA
+  /* Restore DMA pointer immediately after zeroing — the DMA struct is
+   * a separate static allocation (g_otg_dma) that must always be reachable.
+   */
+
+  priv->dma = &g_otg_dma;
+#endif
+
   priv->usbdev.ops = &g_devops;
   priv->usbdev.ep0 = &priv->epin[EP0].ep;
 
@@ -5867,38 +5909,10 @@ void arm_usbinitialize(void)
   int ret;
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-  /* Configure an MPU region for DMA descriptors+buffers as
-   * Normal Non-cacheable.  DWC2 DMA reads/writes these directly
-   * in memory — D-cache coherency doesn't work reliably with
-   * the M55 Secure cache operations.  ARMv8-M MPU Region 1.
+  /* DMA buffers live in the regular Write-Back SRAM (MPU Region 0).
+   * Cache coherency is handled via up_clean_dcache/up_invalidate_dcache
+   * around descriptor arming and completion.
    */
-
-  {
-    uint32_t base = (uint32_t)(uintptr_t)&priv->setup_dma_buf[0];
-    uint32_t end  = (uint32_t)(uintptr_t)&priv->out_desc[STM32_NENDPOINTS - 1];
-
-    /* Round base down to 32-byte boundary, end up */
-
-    base &= ~0x1fu;
-    end   = (end + 31 + sizeof(priv->out_desc[0])) & ~0x1fu;
-
-    /* MPU Region 1: Normal, Non-cacheable, R/W, XN */
-
-    putreg32(1, 0xe000ed98);               /* RNR = 1 */
-    putreg32(base | (1 << 4) | 1,          /* RBAR: base, SH=0, AP=RW, XN */
-             0xe000ed9c);
-    putreg32(((end - 1) & ~0x1fu) | (1 << 1) | 1,  /* RLAR: limit, AttrIdx=1, EN */
-             0xe000eda0);
-
-    /* MAIR1 (AttrIdx=1) = 0x44 = Normal Non-cacheable */
-
-    {
-      uint32_t mair0 = getreg32(0xe000edc0);
-      mair0 &= ~(0xffu << 8);              /* Clear AttrIdx 1 */
-      mair0 |= (0x44u << 8);               /* Normal Non-cacheable */
-      putreg32(mair0, 0xe000edc0);
-    }
-  }
 #endif
 
   usbtrace(TRACE_DEVINIT, 0);
