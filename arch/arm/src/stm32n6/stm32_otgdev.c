@@ -485,28 +485,18 @@ struct stm32_ep_s
 };
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-/* DMA buffers and descriptors — placed in a SEPARATE static allocation
- * so that the MPU non-cacheable region does not share cache lines with
- * the cacheable g_otghsdev struct.  Aligned to 64 bytes to guarantee
- * no cache line straddling on Cortex-M55 (32-byte D-cache lines).
+/* Buffer DMA bounce buffers.  Aligned to 32 bytes (Cortex-M55 D-cache
+ * line size) to prevent cache line sharing with other data.
+ * In buffer DMA mode, DIEPDMA/DOEPDMA point directly to data buffers —
+ * no descriptor structs are needed (unlike descriptor DMA mode).
  */
-
-struct stm32_otg_dmadesc_s
-{
-  volatile uint32_t status;
-  volatile uint32_t buf;
-};
 
 struct stm32_otg_dma_s
 {
-  uint8_t                     setup_dma_buf[32] aligned_data(32);
-  uint8_t                     ep0in_dma_buf[64] aligned_data(32);
-  uint8_t                     ep0out_dma_buf[CONFIG_USBDEV_SETUP_MAXDATASIZE]
-                                             aligned_data(32);
-  struct stm32_otg_dmadesc_s  setup_desc aligned_data(32);
-  struct stm32_otg_dmadesc_s  ctrl_in_desc aligned_data(32);
-  struct stm32_otg_dmadesc_s  in_desc[STM32_NENDPOINTS] aligned_data(32);
-  struct stm32_otg_dmadesc_s  out_desc[STM32_NENDPOINTS] aligned_data(32);
+  uint8_t  setup_buf[32] aligned_data(32);   /* EP0 SETUP receive */
+  uint8_t  ep0in_buf[64] aligned_data(32);   /* EP0 IN bounce */
+  uint8_t  ep0out_buf[CONFIG_USBDEV_SETUP_MAXDATASIZE]
+                         aligned_data(32);   /* EP0 OUT data phase */
 };
 
 static struct stm32_otg_dma_s g_otg_dma aligned_data(64);
@@ -1119,18 +1109,14 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
   stm32_putreg(regval, STM32_OTG_DOEPTSIZ(0));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-  /* Descriptor DMA: build SETUP descriptor and point DOEPDMA to it.
-   * BS=HostBusy arms the descriptor for DMA.  SR=SETUP reception.
-   * 24 bytes = 3 SETUP packets × 8 bytes each.
+  /* Buffer DMA: point DOEPDMA directly to the SETUP receive buffer.
+   * The DWC2 DMA engine writes SETUP data here automatically.
+   * Per ST HAL USB_EP0_OutStart(): just set DOEPDMA and enable EP.
    */
 
-  priv->dma->setup_desc.status = OTG_DMADESC_BS_HBUSY | OTG_DMADESC_SR |
-                            OTG_DMADESC_IOC | OTG_DMADESC_L | 24;
-  priv->dma->setup_desc.buf = (uint32_t)(uintptr_t)priv->dma->setup_dma_buf;
-  up_clean_dcache((uintptr_t)&priv->dma->setup_desc,
-                  (uintptr_t)&priv->dma->setup_desc + sizeof(priv->dma->setup_desc));
-  __asm__ __volatile__ ("dsb 0xf" : : : "memory");
-  stm32_putreg((uint32_t)(uintptr_t)&priv->dma->setup_desc,
+  up_clean_dcache((uintptr_t)priv->dma->setup_buf,
+                  (uintptr_t)priv->dma->setup_buf + 32);
+  stm32_putreg((uint32_t)(uintptr_t)priv->dma->setup_buf,
                STM32_OTG_DOEPDMA(0));
 #endif
 
@@ -1139,6 +1125,15 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
   regval  = stm32_getreg(STM32_OTG_DOEPCTL(0));
   regval |= (OTG_DOEPCTL0_CNAK | OTG_DOEPCTL0_EPENA);
   stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
+
+  syslog(LOG_INFO,
+         "USB: EP0 armed GAHBCFG=0x%08lx DOEPCTL0=0x%08lx "
+         "DOEPDMA0=0x%08lx DOEPTSIZ0=0x%08lx buf=0x%08lx\n",
+         (unsigned long)stm32_getreg(STM32_OTG_GAHBCFG),
+         (unsigned long)stm32_getreg(STM32_OTG_DOEPCTL(0)),
+         (unsigned long)stm32_getreg(STM32_OTG_DOEPDMA(0)),
+         (unsigned long)stm32_getreg(STM32_OTG_DOEPTSIZ(0)),
+         (unsigned long)(uintptr_t)priv->dma->setup_buf);
 }
 
 /****************************************************************************
@@ -1285,32 +1280,29 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
     uint8_t *dmabuf;
     int epno = privep->epphy;
 
+    /* EP0 uses a bounce buffer; other EPs use the request buffer */
+
     if (epno == 0 && nbytes > 0 && nbytes <= 64)
       {
-        memcpy(priv->dma->ep0in_dma_buf, buf, nbytes);
-        dmabuf = priv->dma->ep0in_dma_buf;
+        memcpy(priv->dma->ep0in_buf, buf, nbytes);
+        dmabuf = priv->dma->ep0in_buf;
       }
     else
       {
         dmabuf = buf;
       }
 
-    priv->dma->in_desc[epno].status = OTG_DMADESC_BS_HBUSY |
-                                 OTG_DMADESC_IOC | OTG_DMADESC_L |
-                                 OTG_DMADESC_SP |
-                                 (nbytes & OTG_DMADESC_BYTES_MASK);
-    priv->dma->in_desc[epno].buf = (uint32_t)(uintptr_t)dmabuf;
-    /* Clean data buffer + descriptor so DMA reads current data */
+    /* Buffer DMA: point DIEPDMA directly to the data buffer.
+     * Clean cache so DMA engine reads current data from SRAM.
+     */
 
     if (nbytes > 0)
       {
         up_clean_dcache((uintptr_t)dmabuf, (uintptr_t)dmabuf + nbytes);
       }
 
-    up_clean_dcache((uintptr_t)&priv->dma->in_desc[epno],
-                    (uintptr_t)&priv->dma->in_desc[epno] + sizeof(priv->dma->in_desc[0]));
     __asm__ __volatile__ ("dsb 0xf" : : : "memory");
-    stm32_putreg((uint32_t)(uintptr_t)&priv->dma->in_desc[epno],
+    stm32_putreg((uint32_t)(uintptr_t)dmabuf,
                  STM32_OTG_DIEPDMA(epno));
   }
 #endif
@@ -1322,9 +1314,8 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
   stm32_putreg(regval, STM32_OTG_DIEPCTL(privep->epphy));
 
 #ifndef CONFIG_STM32N6_OTG_DMA
-  /* Write data to TxFIFO (PIO mode only).  In descriptor DMA mode,
-   * the DWC2 reads data from the DMA buffer via DIEPDMA — writing
-   * to the TxFIFO would conflict with the DMA engine.
+  /* Write data to TxFIFO (PIO mode only).  In buffer DMA mode,
+   * the DWC2 reads data via DIEPDMA — no FIFO write needed.
    */
 
   stm32_txfifo_write(privep, buf, nbytes);
@@ -1949,21 +1940,14 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
       stm32_putreg(regval, regaddr);
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-      /* Descriptor DMA: build OUT descriptor for data reception */
+      /* Buffer DMA: point DOEPDMA directly to the receive buffer */
 
       {
         uint8_t *dest = privreq->req.buf + privreq->req.xfrd;
-        int epno = privep->epphy;
 
-        priv->dma->out_desc[epno].status = OTG_DMADESC_BS_HBUSY |
-                                      OTG_DMADESC_IOC | OTG_DMADESC_L |
-                                      (xfrsize & OTG_DMADESC_BYTES_MASK);
-        priv->dma->out_desc[epno].buf = (uint32_t)(uintptr_t)dest;
-        up_clean_dcache((uintptr_t)&priv->dma->out_desc[epno],
-                        (uintptr_t)&priv->dma->out_desc[epno] + sizeof(priv->dma->out_desc[0]));
         __asm__ __volatile__ ("dsb 0xf" : : : "memory");
-        stm32_putreg((uint32_t)(uintptr_t)&priv->dma->out_desc[epno],
-                     STM32_OTG_DOEPDMA(epno));
+        stm32_putreg((uint32_t)(uintptr_t)dest,
+                     STM32_OTG_DOEPDMA(privep->epphy));
       }
 #endif
 
@@ -2244,12 +2228,8 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
 
   /* Unmask OUT interrupts */
 
-#ifdef CONFIG_STM32N6_OTG_DMA
   regval = (OTG_DOEPMSK_XFRCM | OTG_DOEPMSK_STUPM | OTG_DOEPMSK_EPDM |
-            OTG_DOEPMSK_STSPHSRXM | OTG_DOEPMSK_AHBERR);
-#else
-  regval = (OTG_DOEPMSK_XFRCM | OTG_DOEPMSK_STUPM | OTG_DOEPMSK_EPDM);
-#endif
+            OTG_DOEPMSK_AHBERR);
   stm32_putreg(regval, STM32_OTG_DOEPMSK);
 
   /* Unmask IN interrupts */
@@ -2910,21 +2890,14 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
           doepint  = stm32_getreg(STM32_OTG_DOEPINT(epno));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-          /* Descriptor DMA: clear ALL raw bits immediately, then mask.
-           * Keep STUPPKTRCVD (bit 15) for XFRC suppression.
+          /* Buffer DMA on DWC2 CID > 0x300A (ours is 0x5000):
+           * STUPPKTRCVD (bit 15) must be checked/cleared alongside
+           * XFRC and SETUP per ST HAL PCD_EP_OutXfrComplete_int().
+           * Include it in the mask so we can see it.
            */
 
-          stm32_putreg(doepint, STM32_OTG_DOEPINT(epno));
           doepint &= (stm32_getreg(STM32_OTG_DOEPMSK) |
                       OTG_DOEPINT_STUPPKTRCVD);
-
-          /* Suppress XFRC during SETUP on EP0 (Linux pattern) */
-
-          if (epno == 0 &&
-              (doepint & (OTG_DOEPINT_SETUP | OTG_DOEPINT_STUPPKTRCVD)))
-            {
-              doepint &= ~OTG_DOEPINT_XFRC;
-            }
 #else
           doepint &= stm32_getreg(STM32_OTG_DOEPMSK);
 #endif
@@ -2937,6 +2910,9 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
 
           if ((doepint & OTG_DOEPINT_XFRC) != 0)
             {
+              syslog(LOG_INFO, "USB: EP%d XFRC doepint=0x%04lx raw=0x%08lx\n",
+                     epno, (unsigned long)doepint,
+                     (unsigned long)stm32_getreg(STM32_OTG_DOEPINT(epno)));
               usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPOUT_XFRC),
                        (uint16_t)doepint);
 
@@ -2945,6 +2921,21 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
               stm32_putreg(OTG_DOEPINT_XFRC, STM32_OTG_DOEPINT(epno));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
+              /* Per ST HAL: on XFRC with DMA, if SETUP or STUPPKTRCVD
+               * is also set, clear STUPPKTRCVD and skip data processing
+               * (the SETUP handler below will handle it).
+               */
+
+              {
+                uint32_t raw = stm32_getreg(STM32_OTG_DOEPINT(epno));
+                if (raw & (OTG_DOEPINT_SETUP | OTG_DOEPINT_STUPPKTRCVD))
+                  {
+                    stm32_putreg(OTG_DOEPINT_STUPPKTRCVD,
+                                 STM32_OTG_DOEPINT(epno));
+                    goto skip_xfrc;
+                  }
+              }
+
               /* In DMA mode, data was written directly to the request
                * buffer by the DWC2 DMA engine.  Update req.xfrd from
                * the DOEPTSIZ residual (original xfrsize - remaining).
@@ -2961,16 +2952,12 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                     uint32_t xfrsiz_remain;
                     uint32_t xfrd;
 
-                    /* Read remaining bytes from descriptor status */
+                    /* Buffer DMA: read residual from DOEPTSIZ register */
 
-                    /* Invalidate descriptor + receive buffer after DMA */
-
-                    up_invalidate_dcache(
-                      (uintptr_t)&priv->dma->out_desc[epno],
-                      (uintptr_t)&priv->dma->out_desc[epno] +
-                      sizeof(priv->dma->out_desc[0]));
-                    xfrsiz_remain = priv->dma->out_desc[epno].status &
-                                    OTG_DMADESC_BYTES_MASK;
+                    xfrsiz_remain =
+                      (stm32_getreg(STM32_OTG_DOEPTSIZ(epno)) &
+                       OTG_DOEPTSIZ_XFRSIZ_MASK) >>
+                      OTG_DOEPTSIZ_XFRSIZ_SHIFT;
 
                     xfrsiz_orig =
                       ((privreq->req.len - privreq->req.xfrd +
@@ -2995,6 +2982,10 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
 
               stm32_epout(priv, epno);
             }
+
+#ifdef CONFIG_STM32N6_OTG_DMA
+        skip_xfrc:
+#endif
 
           /* Endpoint disabled interrupt (ignored because this interrupt is
            * used in polled mode by the endpoint disable logic).
@@ -3021,8 +3012,19 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                         priv->ep0state);
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-              /* Descriptor DMA: read SETUP data from DMA buffer.
-               * The descriptor wrote 8 bytes to setup_dma_buf.
+              /* Per ST HAL PCD_EP_OutSetupPacket_int():
+               * Clear STUPPKTRCVD on CID > 0x300A before processing.
+               */
+
+              if (stm32_getreg(STM32_OTG_DOEPINT(epno)) &
+                  OTG_DOEPINT_STUPPKTRCVD)
+                {
+                  stm32_putreg(OTG_DOEPINT_STUPPKTRCVD,
+                               STM32_OTG_DOEPINT(epno));
+                }
+
+              /* Buffer DMA: read SETUP data from the DMA buffer.
+               * DWC2 wrote 8 bytes to setup_buf via DOEPDMA(0).
                */
 
               if (epno == 0)
@@ -3030,10 +3032,17 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                   uint16_t datlen;
 
                   up_invalidate_dcache(
-                    (uintptr_t)priv->dma->setup_dma_buf,
-                    (uintptr_t)priv->dma->setup_dma_buf + 32);
-                  memcpy(&priv->ctrlreq, priv->dma->setup_dma_buf,
+                    (uintptr_t)priv->dma->setup_buf,
+                    (uintptr_t)priv->dma->setup_buf + 32);
+                  memcpy(&priv->ctrlreq, priv->dma->setup_buf,
                          USB_SIZEOF_CTRLREQ);
+
+                  syslog(LOG_INFO,
+                         "USB: SETUP DMA [%02x %02x %02x %02x %02x %02x %02x %02x]\n",
+                         priv->dma->setup_buf[0], priv->dma->setup_buf[1],
+                         priv->dma->setup_buf[2], priv->dma->setup_buf[3],
+                         priv->dma->setup_buf[4], priv->dma->setup_buf[5],
+                         priv->dma->setup_buf[6], priv->dma->setup_buf[7]);
 
                   datlen = GETUINT16(priv->ctrlreq.len);
                   if (USB_REQ_ISOUT(priv->ctrlreq.type) && datlen > 0)
@@ -3055,7 +3064,7 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                            STM32_OTG_DOEPINT(epno));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-              /* Re-arm EP0 OUT for next SETUP/STATUS/DATA */
+              /* Per ST HAL: re-arm EP0 OUT for next SETUP */
 
               if (epno == 0)
                 {
@@ -3529,10 +3538,18 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
             usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_OUTRECVD), epphy);
             bcnt = (regval & OTG_GRXSTSD_BCNT_MASK) >>
                     OTG_GRXSTSD_BCNT_SHIFT;
+#ifdef CONFIG_STM32N6_OTG_DMA
+            /* In descriptor DMA mode, OUT data was transferred directly
+             * to the DMA buffer by the DWC2 engine — NOT to the RxFIFO.
+             * Do NOT read from the FIFO here; the DOEPINT.XFRC handler
+             * will process the DMA buffer contents.
+             */
+#else
             if (bcnt > 0)
               {
                 stm32_epout_receive(privep, bcnt);
               }
+#endif
           }
           break;
 
@@ -3567,6 +3584,11 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
           {
             usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SETUPDONE), epphy);
 
+#ifdef CONFIG_STM32N6_OTG_DMA
+            /* In DMA mode, DOEPINT.SETUP handles SETUP dispatch and
+             * EP0 re-arm.  Nothing to do here — just pop the status.
+             */
+#else
             /* Now that the Setup Phase is complete if it was an OUT enable
              * the endpoint
              * (Doing this here prevents the loss of the first FIFO word)
@@ -3579,19 +3601,7 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
                 regval  = stm32_getreg(STM32_OTG_DOEPCTL(0));
                 regval |= OTG_DOEPCTL0_CNAK;
                 stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
-            }
-
-#ifdef CONFIG_STM32N6_OTG_DMA
-            /* DOEPINT.SETUP may not fire even with descriptor DMA.
-             * Dispatch from SETUPDONE as fallback, re-arm EP0 OUT.
-             */
-
-            if (priv->ep0state == EP0STATE_SETUP_READY)
-              {
-                stm32_ep0out_setup(priv);
               }
-
-            stm32_ep0out_ctrlsetup(priv);
 #endif
           }
           break;
@@ -3609,31 +3619,18 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
 
             usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SETUPRECVD), epphy);
 
-            /* Read EP0 setup data.
-             * NOTE:  If multiple SETUP packets are received, the last one
-             * overwrites the previous setup packets and only that last
-             * SETUP packet will be processed.
-             *
-             * In DMA mode this is never reached (RXFLVL masked), but
-             * kept for safety.
+#ifdef CONFIG_STM32N6_OTG_DMA
+            /* In descriptor DMA mode, SETUP data was written directly
+             * to setup_buf by the DWC2 DMA engine.  Do NOT read
+             * from the RxFIFO — it doesn't contain the data.
+             * The DOEPINT.SETUP handler will read the DMA buffer.
              */
-
-            /* Drain RxFIFO (always needed to clear RXFLVL) */
+#else
+            /* Read EP0 setup data from the RxFIFO (PIO mode). */
 
             stm32_rxfifo_read(&priv->epout[EP0],
                              (uint8_t *)&priv->ctrlreq,
                               USB_SIZEOF_CTRLREQ);
-
-#ifdef CONFIG_STM32N6_OTG_DMA
-            /* In descriptor DMA mode, FIFO data may be unreliable.
-             * Overwrite ctrlreq from the DMA buffer where the
-             * descriptor wrote the SETUP data.
-             */
-
-            /* DMA buffers in non-cacheable MPU region — no flush needed */
-            memcpy(&priv->ctrlreq, priv->dma->setup_dma_buf,
-                   USB_SIZEOF_CTRLREQ);
-#endif
 
             datlen = GETUINT16(priv->ctrlreq.len);
             if (USB_REQ_ISOUT(priv->ctrlreq.type) && datlen > 0)
@@ -3644,6 +3641,7 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
               {
                 priv->ep0state = EP0STATE_SETUP_READY;
               }
+#endif
           }
           break;
 
@@ -3710,6 +3708,20 @@ static inline void stm32_enuminterrupt(struct stm32_usbdev_s *priv)
 
   stm32_ep0_configure(priv);
   stm32_ep0out_ctrlsetup(priv);
+
+  /* Debug: dump DWC2 hardware config and key DMA registers */
+
+  syslog(LOG_INFO,
+         "USB: GHWCFG2=0x%08lx GHWCFG4=0x%08lx CID=0x%08lx SNPSID=0x%08lx\n",
+         (unsigned long)getreg32(STM32_OTG_BASE + 0x0048),
+         (unsigned long)getreg32(STM32_OTG_BASE + 0x0050),
+         (unsigned long)getreg32(STM32_OTG_BASE + 0x0040),
+         (unsigned long)getreg32(STM32_OTG_BASE + 0x0044));
+  syslog(LOG_INFO,
+         "USB: DCFG=0x%08lx GDFIFOCFG=0x%08lx GINTMSK=0x%08lx\n",
+         (unsigned long)getreg32(STM32_OTG_BASE + 0x0800),
+         (unsigned long)getreg32(STM32_OTG_BASE + 0x005c),
+         (unsigned long)getreg32(STM32_OTG_BASE + 0x0018));
 }
 
 /****************************************************************************
@@ -4053,6 +4065,8 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
           /* Perform the device reset */
 
+          syslog(LOG_INFO, "USB: BUSRST gintsts=0x%08lx\n",
+                 (unsigned long)regval);
           stm32_usbreset(priv);
           usbtrace(TRACE_INTEXIT(STM32_TRACEINTID_USB), 0);
           return OK;
@@ -4062,6 +4076,10 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
       if ((regval & OTG_GINT_ENUMDNE) != 0)
         {
+          uint32_t dsts = stm32_getreg(STM32_OTG_DSTS);
+          syslog(LOG_INFO, "USB: ENUMDNE DSTS=0x%08lx speed=%s\n",
+                 (unsigned long)dsts,
+                 ((dsts >> 1) & 3) == 0 ? "HS" : "FS");
           usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_ENUMDNE),
                   (uint16_t)regval);
           stm32_enuminterrupt(priv);
@@ -5656,9 +5674,10 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   regval = stm32_getreg(STM32_OTG_DCFG);
   regval &= ~OTG_DCFG_DSPD_MASK;
   regval |= OTG_DCFG_DSPD_HS;
-#ifdef CONFIG_STM32N6_OTG_DMA
-  regval |= OTG_DCFG_DESCDMA;
-#endif
+  /* Buffer DMA mode: DCFG.DESCDMA is NOT set (that's descriptor DMA).
+   * Only GAHBCFG.DMAEN is needed for buffer DMA.
+   */
+
   stm32_putreg(regval, STM32_OTG_DCFG);
 
   /* Zero out all DIEPTXF registers before FIFO setup (per ST HAL).
@@ -5819,9 +5838,12 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
 
   /* Enable the interrupts in the INTMSK */
 
-  /* RXFLVL must stay enabled in DMA mode on STM32N6: without it
-   * the core never generates ENUMDNE after bus reset.  SETUP data
-   * is read from the DMA buffer; RXFLVL drains FIFO metadata.
+  /* RXFLVL must be enabled even in buffer DMA mode: the DWC2 core
+   * only asserts DOEPINT.SETUP after the SETUPDONE status entry is
+   * popped from GRXSTSP.  Without RXFLVL, nothing pops the status
+   * queue and SETUP interrupts never fire.  In DMA mode, the RXFLVL
+   * handler pops status entries but skips FIFO data reads (DMA
+   * handles data transfer).
    */
 
   regval = (OTG_GINT_RXFLVL | OTG_GINT_USBSUSP | OTG_GINT_ENUMDNE |
@@ -5854,35 +5876,42 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   regval = OTG_GAHBCFG_GINTMSK | OTG_GAHBCFG_TXFELVL;
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-  /* Enable the DWC2 internal DMA engine and set burst length to INCR4.
-   * In DMA mode, the core uses DMA to transfer data to/from endpoint
-   * buffers instead of the CPU manually reading/writing FIFOs.
-   * HBSTLEN=3 (INCR4) is a safe default for AHB burst.
+  /* Buffer DMA mode (per ST HAL USB_CoreInit):
+   *  1. Configure RIFSC RIMC for OTG1 DMA master access
+   *  2. Reserve 18 FIFO locations for DMA in GDFIFOCFG
+   *  3. Set HBSTLEN=INCR4, enable GAHBCFG.DMAEN
    */
 
-  /* Configure RIFSC RIMC to grant OTG1 DMA master Secure+Privileged
-   * access.  Without this, the DWC2 DMA engine cannot read/write
-   * Secure AXISRAM (0x34000000) and IN transfers silently fail.
-   * RIMC_ATTRx[4] = OTG1 master, bit 8=MSEC, bit 9=MPRIV.
+  /* RIFSC configuration per ST HAL SystemIsolation_Config():
+   *
+   * 1. RIMC master: OTG1 DMA master gets CID=1, Secure+Privileged.
+   *    Without this, DWC2 DMA cannot access Secure AXISRAM.
+   *    MCID=1 (bit 4) + MSEC (bit 8) + MPRIV (bit 9) = 0x310.
+   *
+   * 2. RISC slave: OTG1HS peripheral marked Secure+Privileged.
+   *    OTG1HS is bit 24 in SECCFGR1 (offset 0x014) / PRIVCFGR1 (0x034).
    */
 
-#define RIFSC_RIMC_ATTR4  (STM32_RIFSC_BASE + 0x0C20)
+#define RIFSC_RIMC_ATTR4      (STM32_RIFSC_BASE + 0x0C20)
+#define RIFSC_RISC_SECCFGR1   (STM32_RIFSC_BASE + 0x014)
+#define RIFSC_RISC_PRIVCFGR1  (STM32_RIFSC_BASE + 0x034)
+
+  putreg32(0x310, RIFSC_RIMC_ATTR4);
+  modifyreg32(RIFSC_RISC_SECCFGR1, 0, (1 << 24));   /* OTG1HS Secure */
+  modifyreg32(RIFSC_RISC_PRIVCFGR1, 0, (1 << 24));   /* OTG1HS Privileged */
+
+  /* Reserve 18 FIFO locations for DMA buffers per ST HAL:
+   * GDFIFOCFG[31:16] = 0x3EE (EPInfoBaseAddr), keep [15:0] intact.
+   */
+
   {
-    /* MCID=1 (bit 4) + MSEC (bit 8) + MPRIV (bit 9) = 0x310.
-     * CID must be 1 (not 0) — SRAM filters block CID=0 from DMA
-     * masters.  Matches ST x-cube Security_Config() for OTG1.
-     */
-
-    putreg32(0x310, RIFSC_RIMC_ATTR4);
+    uint32_t gdfifocfg = stm32_getreg(STM32_OTG_BASE + 0x005c);
+    gdfifocfg &= ~(0xFFFFUL << 16);
+    gdfifocfg |= (0x3EEUL << 16);
+    stm32_putreg(gdfifocfg, STM32_OTG_BASE + 0x005c);
   }
 
-  /* GDFIFOCFG EPInfoBaseAddr is already configured at FIFO setup time
-   * (line ~5672) using the computed total FIFO allocation.
-   */
-
-  /* Descriptor DMA mode: DCFG.DESCDMA=1, GAHBCFG.DMAEN=1.
-   * DOEPDMA/DIEPDMA point to 8-byte descriptors, not data buffers.
-   */
+  /* HBSTLEN=INCR4, DMAEN=1 */
 
   regval |= OTG_GAHBCFG_DMAEN | (3 << OTG_GAHBCFG_HBSTLEN_SHIFT);
 #endif
@@ -5909,7 +5938,7 @@ void arm_usbinitialize(void)
   int ret;
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-  /* DMA buffers live in the regular Write-Back SRAM (MPU Region 0).
+  /* DMA buffers live in Write-Back cacheable SRAM (MPU Region 0).
    * Cache coherency is handled via up_clean_dcache/up_invalidate_dcache
    * around descriptor arming and completion.
    */
