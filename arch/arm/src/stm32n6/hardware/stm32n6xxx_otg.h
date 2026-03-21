@@ -645,7 +645,8 @@
                                                                   /* Bit 13: Reserved */
 #define OTG_DCFG_XCVRDLY              (1 << 14)                   /* Bit 14: Transceiver delay */
 #define OTG_DCFG_ERRATIMY             (1 << 15)                   /* Bit 15: Erratic error interrupt mask */
-                                                                  /* Bits 16-23: Reserved */
+                                                                  /* Bits 16-22: Reserved */
+#define OTG_DCFG_DESCDMA              (1 << 23)                   /* Bit 23: Descriptor DMA enable */
 #define OTG_DCFG_PERSCHIVL_SHIFT      (24)                        /* Bits 24-25: Periodic schedule interval */
 #define OTG_DCFG_PERSCHIVL_MASK       (3 << OTG_DCFG_PERSCHIVL_SHIFT)
                                                                   /* Bits 26-31: Reserved */
@@ -901,7 +902,8 @@
 #define OTG_DOEPINT_BERR              (1 << 12) /* Bit 12: Babble error interrupt mask */
 #define OTG_DOEPINT_NAK               (1 << 13) /* Bit 13: NAK interrupt mask */
 #define OTG_DOEPINT_NYET              (1 << 14) /* Bit 14: NYET interrupt mask */
-                                                /* Bits 15-31: Reserved */
+#define OTG_DOEPINT_STUPPKTRCVD       (1 << 15) /* Bit 15: SETUP packet received (DMA only) */
+                                                /* Bits 16-31: Reserved */
 
 /* Device OUT endpoint-0 transfer size register */
 
@@ -929,6 +931,23 @@
 #  define OTG_DOEPTSIZ_RXDPID_DATA1   (2 << OTG_DOEPTSIZ_RXDPID_SHIFT)
 #  define OTG_DOEPTSIZ_RXDPID_MDATA   (3 << OTG_DOEPTSIZ_RXDPID_SHIFT)
                                                 /* Bit 31: Reserved */
+
+/* DMA Descriptor Status Word (Descriptor DMA mode, DCFG.DESCDMA=1) */
+
+#define OTG_DMADESC_BS_HREADY         (0u << 30)  /* Host Ready */
+#define OTG_DMADESC_BS_DMABUSY        (1u << 30)  /* DMA Busy */
+#define OTG_DMADESC_BS_DMADONE        (2u << 30)  /* DMA Done */
+#define OTG_DMADESC_BS_HBUSY          (3u << 30)  /* Host Busy (arm for DMA) */
+#define OTG_DMADESC_BS_MASK           (3u << 30)
+#define OTG_DMADESC_STS_SUCC          (0u << 28)  /* Success */
+#define OTG_DMADESC_STS_BUFERR        (3u << 28)  /* Buffer Error */
+#define OTG_DMADESC_STS_MASK          (3u << 28)
+#define OTG_DMADESC_L                 (1u << 27)  /* Last descriptor */
+#define OTG_DMADESC_SP                (1u << 26)  /* Short packet */
+#define OTG_DMADESC_IOC               (1u << 25)  /* Interrupt on complete */
+#define OTG_DMADESC_SR                (1u << 24)  /* SETUP received (EP0 OUT) */
+#define OTG_DMADESC_MTRF              (1u << 23)  /* Multi-transfer */
+#define OTG_DMADESC_BYTES_MASK        (0xffffu)   /* Byte count [15:0] */
 
 /* Power and clock gating control register */
 
