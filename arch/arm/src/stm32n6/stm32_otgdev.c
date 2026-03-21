@@ -1934,7 +1934,6 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
       /* Descriptor DMA: build OUT descriptor for data reception */
 
       {
-        struct stm32_usbdev_s *priv = privep->dev;
         uint8_t *dest = privreq->req.buf + privreq->req.xfrd;
         int epno = privep->epphy;
 
@@ -5888,7 +5887,7 @@ void arm_usbinitialize(void)
     putreg32(1, 0xe000ed98);               /* RNR = 1 */
     putreg32(base | (1 << 4) | 1,          /* RBAR: base, SH=0, AP=RW, XN */
              0xe000ed9c);
-    putreg32((end - 1) | (1 << 1) | 1,     /* RLAR: limit, AttrIdx=1, EN */
+    putreg32(((end - 1) & ~0x1fu) | (1 << 1) | 1,  /* RLAR: limit, AttrIdx=1, EN */
              0xe000eda0);
 
     /* MAIR1 (AttrIdx=1) = 0x44 = Normal Non-cacheable */
