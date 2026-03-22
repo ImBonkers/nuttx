@@ -215,7 +215,7 @@
 
 #if (STM32_RXFIFO_BYTES + \
      STM32_EP0_TXFIFO_BYTES + STM32_EP1_TXFIFO_BYTES + STM32_EP2_TXFIFO_BYTES + STM32_EP3_TXFIFO_BYTES + \
-     STM32_EP4_TXFIFO_BYTES + STM32_EP5_TXFIFO_BYTES + STM32_EP6_TXFIFO_BYTES + STM32_EP7_TXFIFO_BYTES + CONFIG_USBDEV_EP8_TXFIFO_SIZE   \
+     STM32_EP4_TXFIFO_BYTES + STM32_EP5_TXFIFO_BYTES + STM32_EP6_TXFIFO_BYTES + STM32_EP7_TXFIFO_BYTES + STM32_EP8_TXFIFO_BYTES   \
     ) > STM32_OTG_FIFO_SIZE
 #  error "FIFO allocations exceed FIFO memory size"
 #endif
@@ -502,6 +502,60 @@ struct stm32_otg_dma_s
 static struct stm32_otg_dma_s g_otg_dma aligned_data(64);
 #endif
 
+/* Lightweight USB debug ring buffer — non-blocking, ISR-safe. */
+
+#define USB_DBGRING_SIZE 64
+
+struct usb_dbg_entry
+{
+  uint8_t  tag;
+  uint8_t  ep0state;
+  uint8_t  data[8];
+  uint16_t extra;
+};
+
+static struct usb_dbg_entry g_usb_dbg[USB_DBGRING_SIZE];
+static volatile unsigned int g_usb_dbg_idx;
+
+static void usb_dbg_log(uint8_t tag, uint8_t state,
+                         const uint8_t *data, uint16_t extra)
+{
+  unsigned int idx = g_usb_dbg_idx % USB_DBGRING_SIZE;
+  g_usb_dbg[idx].tag = tag;
+  g_usb_dbg[idx].ep0state = state;
+  if (data)
+    {
+      memcpy(g_usb_dbg[idx].data, data, 8);
+    }
+  else
+    {
+      memset(g_usb_dbg[idx].data, 0, 8);
+    }
+
+  g_usb_dbg[idx].extra = extra;
+  g_usb_dbg_idx++;
+}
+
+void usb_dbg_dump(void)
+{
+  unsigned int end = g_usb_dbg_idx;
+  unsigned int start = (end > USB_DBGRING_SIZE) ?
+                       (end - USB_DBGRING_SIZE) : 0;
+  unsigned int i;
+
+  syslog(LOG_INFO, "USB debug log (%u entries):\n", end - start);
+  for (i = start; i < end; i++)
+    {
+      struct usb_dbg_entry *e = &g_usb_dbg[i % USB_DBGRING_SIZE];
+      syslog(LOG_INFO, "[%3u] %c st=%d %02x %02x %02x%02x %02x%02x "
+             "%02x%02x x=%04x\n",
+             i, e->tag, e->ep0state,
+             e->data[0], e->data[1], e->data[3], e->data[2],
+             e->data[5], e->data[4], e->data[7], e->data[6],
+             e->extra);
+    }
+}
+
 /* This structure retains the state of the USB device controller */
 
 struct stm32_usbdev_s
@@ -525,6 +579,7 @@ struct stm32_usbdev_s
   uint8_t                 configured:1;  /* 1: Class driver has been configured */
   uint8_t                 wakeup:1;      /* 1: Device remote wake-up */
   uint8_t                 dotest:1;      /* 1: Test mode selected */
+  uint8_t                 ep0out_xfrc_expected:1; /* 1: Real EP0 OUT data expected */
 
   uint8_t                 devstate:4;    /* See enum stm32_devstate_e */
   uint8_t                 ep0state:4;    /* See enum stm32_ep0state_e */
@@ -1045,6 +1100,12 @@ static void stm32_ep0in_setupresponse(struct stm32_usbdev_s *priv,
 {
   stm32_epin_transfer(&priv->epin[EP0], buf, nbytes);
   priv->ep0state = EP0STATE_SETUPRESPONSE;
+
+  /* For IN data responses (nbytes > 0), host sends ZLP OUT status.
+   * For ZLP IN status (nbytes == 0, e.g. SET_ADDRESS), no OUT follows.
+   */
+
+  priv->ep0out_xfrc_expected = (nbytes > 0);
   stm32_ep0out_ctrlsetup(priv);
 }
 
@@ -1101,7 +1162,9 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
 {
   uint32_t regval;
 
-  /* Setup the hardware to perform the SETUP transfer */
+  /* Always re-program DOEPTSIZ and DOEPDMA so the DMA buffer and
+   * transfer size are correct for the next SETUP packet.
+   */
 
   regval = (USB_SIZEOF_CTRLREQ * 3 << OTG_DOEPTSIZ0_XFRSIZ_SHIFT) |
            (OTG_DOEPTSIZ0_PKTCNT) |
@@ -1109,10 +1172,7 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
   stm32_putreg(regval, STM32_OTG_DOEPTSIZ(0));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-  /* Buffer DMA: point DOEPDMA directly to the SETUP receive buffer.
-   * The DWC2 DMA engine writes SETUP data here automatically.
-   * Per ST HAL USB_EP0_OutStart(): just set DOEPDMA and enable EP.
-   */
+  /* Buffer DMA: point DOEPDMA directly to the SETUP receive buffer. */
 
   up_clean_dcache((uintptr_t)priv->dma->setup_buf,
                   (uintptr_t)priv->dma->setup_buf + 32);
@@ -1120,20 +1180,18 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
                STM32_OTG_DOEPDMA(0));
 #endif
 
-  /* Then clear NAKing and enable the transfer */
+  /* Per ST HAL USB_EP0_OutStart(): on DWC2 CID > 0x300A (ours is
+   * 0x5000), skip the CNAK+EPENA write if EP0 OUT is already enabled.
+   * Writing CNAK+EPENA when EPENA is already set triggers spurious
+   * XFRC interrupts on the DWC2 v5.00 core.
+   */
 
-  regval  = stm32_getreg(STM32_OTG_DOEPCTL(0));
-  regval |= (OTG_DOEPCTL0_CNAK | OTG_DOEPCTL0_EPENA);
-  stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
-
-  syslog(LOG_INFO,
-         "USB: EP0 armed GAHBCFG=0x%08lx DOEPCTL0=0x%08lx "
-         "DOEPDMA0=0x%08lx DOEPTSIZ0=0x%08lx buf=0x%08lx\n",
-         (unsigned long)stm32_getreg(STM32_OTG_GAHBCFG),
-         (unsigned long)stm32_getreg(STM32_OTG_DOEPCTL(0)),
-         (unsigned long)stm32_getreg(STM32_OTG_DOEPDMA(0)),
-         (unsigned long)stm32_getreg(STM32_OTG_DOEPTSIZ(0)),
-         (unsigned long)(uintptr_t)priv->dma->setup_buf);
+  if ((stm32_getreg(STM32_OTG_DOEPCTL(0)) & OTG_DOEPCTL_EPENA) == 0)
+    {
+      regval  = stm32_getreg(STM32_OTG_DOEPCTL(0));
+      regval |= (OTG_DOEPCTL0_CNAK | OTG_DOEPCTL0_EPENA);
+      stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
+    }
 }
 
 /****************************************************************************
@@ -1193,6 +1251,19 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
 {
   uint32_t pktcnt;
   uint32_t regval;
+
+  if (privep->epphy == EP0)
+    {
+      uint8_t d[8];
+      memset(d, 0, 8);
+      d[0] = (uint8_t)nbytes;
+      if (buf && nbytes > 0 && nbytes <= 6)
+        {
+          memcpy(&d[2], buf, nbytes);
+        }
+
+      usb_dbg_log('T', privep->dev->ep0state, d, (uint16_t)nbytes);
+    }
 
   /* Read the DIEPSIZx register */
 
@@ -1285,6 +1356,14 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
     if (epno == 0 && nbytes > 0 && nbytes <= 64)
       {
         memcpy(priv->dma->ep0in_buf, buf, nbytes);
+        dmabuf = priv->dma->ep0in_buf;
+      }
+    else if (nbytes == 0)
+      {
+        /* ZLP: DIEPDMA must still point to a valid address even though
+         * no data will be read.  Use the bounce buffer as a dummy target.
+         */
+
         dmabuf = priv->dma->ep0in_buf;
       }
     else
@@ -2163,15 +2242,27 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
   uint32_t regval;
   int i;
 
+  usb_dbg_log('R', priv->ep0state, NULL, 0);
+
   /* Clear the Remote Wake-up Signaling */
 
   regval = stm32_getreg(STM32_OTG_DCTL);
   regval &= ~OTG_DCTL_RWUSIG;
   stm32_putreg(regval, STM32_OTG_DCTL);
 
-  /* Flush the EP0 Tx FIFO */
+  /* Flush all FIFOs.  The RxFIFO flush is critical: during bus reset
+   * (SE0), the DWC2 may queue spurious OUT status entries in the RxFIFO.
+   */
 
-  stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(EP0));
+  stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_DALL);
+  stm32_rxfifo_flush();
+
+  /* Drain any remaining status entries from GRXSTSP. */
+
+  while (stm32_getreg(STM32_OTG_GINTSTS) & OTG_GINT_RXFLVL)
+    {
+      (void)stm32_getreg(STM32_OTG_GRXSTSP);
+    }
 
   /* Tell the class driver that we are disconnected. The class
    * driver should then accept any new configurations.
@@ -2241,6 +2332,7 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
 
   stm32_setaddress(priv, 0);
   priv->devstate = DEVSTATE_DEFAULT;
+  priv->ep0out_xfrc_expected = false;
 
   /* Report full speed — with DSPD=FSHS, we enumerate at FS */
 
@@ -2801,6 +2893,25 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
               priv->ep0state = EP0STATE_IDLE;
             }
         }
+      else if (priv->ep0out_xfrc_expected)
+        {
+          usb_dbg_log('O', priv->ep0state, NULL, 0);
+
+          /* Real ZLP OUT status from host after an IN data transfer.
+           * Re-arm EP0 OUT for the next SETUP packet.
+           */
+
+          priv->ep0out_xfrc_expected = false;
+          stm32_ep0out_ctrlsetup(priv);
+          priv->ep0state = EP0STATE_IDLE;
+        }
+      else
+        {
+          /* Spurious EP0 OUT XFRC (DWC2 v5.00 fires these during
+           * CNAK+EPENA transitions and after bus reset recovery).
+           * Just clear the interrupt.
+           */
+        }
     }
 
   /* For other endpoints, the only possibility is that we are continuing
@@ -3034,8 +3145,11 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                   up_invalidate_dcache(
                     (uintptr_t)priv->dma->setup_buf,
                     (uintptr_t)priv->dma->setup_buf + 32);
+                  __asm__ __volatile__ ("dsb 0xf" : : : "memory");
                   memcpy(&priv->ctrlreq, priv->dma->setup_buf,
                          USB_SIZEOF_CTRLREQ);
+                  usb_dbg_log('S', priv->ep0state,
+                              (const uint8_t *)&priv->ctrlreq, 0);
 
                   syslog(LOG_INFO,
                          "USB: SETUP DMA [%02x %02x %02x %02x %02x %02x %02x %02x]\n",
@@ -3115,6 +3229,9 @@ static inline void stm32_epin(struct stm32_usbdev_s *priv, uint8_t epno)
 
   if (epno == 0)
     {
+      usb_dbg_log('I', priv->ep0state, NULL,
+                  (privep->active << 8));
+
       /* In the EP0STATE_DATA_IN state, we are sending data from request
        * buffer.  In that case, we must continue the request processing.
        */
@@ -3131,6 +3248,7 @@ static inline void stm32_epin(struct stm32_usbdev_s *priv, uint8_t epno)
 
           if (!privep->active)
             {
+              priv->ep0out_xfrc_expected = true;
               stm32_ep0out_ctrlsetup(priv);
               priv->ep0state = EP0STATE_IDLE;
             }
@@ -3439,6 +3557,11 @@ static inline void stm32_suspendinterrupt(struct stm32_usbdev_s *priv)
   uint32_t regval;
 #endif
 
+  if (g_usb_dbg_idx > 3)
+    {
+      usb_dbg_dump();
+    }
+
   /* Notify the class driver of the suspend event */
 
   if (priv->driver)
@@ -3667,6 +3790,9 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
 static inline void stm32_enuminterrupt(struct stm32_usbdev_s *priv)
 {
   uint32_t regval;
+
+  usb_dbg_log('E', 0, NULL,
+              (stm32_getreg(STM32_OTG_DSTS) >> 1) & 3);
 
   /* Activate EP0 */
 
@@ -5756,16 +5882,9 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   stm32_putreg(regval, STM32_OTG_DIEPTXF(8));
 #endif
 
-  /* Update GDFIFOCFG: move EPINFOBASE past our FIFO allocation.
-   * DWC2 CID=0x5000 has internal DMA architecture; the EPC region
-   * must not overlap with allocated FIFOs.
+  /* NOTE: GDFIFOCFG is set later in the DMA section (0x3EE << 16).
+   * Do not write it here — the DMA config below will set it correctly.
    */
-
-#if STM32_NENDPOINTS > 8
-  address += STM32_EP8_TXFIFO_WORDS;
-#endif
-  putreg32(((uint32_t)address << 16) | 0x0400,
-           STM32_OTG_BASE + 0x005c);  /* GDFIFOCFG */
 
   /* Flush the FIFOs */
 
