@@ -504,7 +504,7 @@ static struct stm32_otg_dma_s g_otg_dma aligned_data(64);
 
 /* Lightweight USB debug ring buffer — non-blocking, ISR-safe. */
 
-#define USB_DBGRING_SIZE 64
+#define USB_DBGRING_SIZE 128
 
 struct usb_dbg_entry
 {
@@ -2725,6 +2725,7 @@ void stm32_ep0out_stdrequest(struct stm32_usbdev_s *priv,
                     priv->devstate   = DEVSTATE_ADDRESSED;
                     priv->configured = false;
                   }
+
               }
           }
         else
@@ -2851,6 +2852,13 @@ static inline void stm32_ep0out_setup(struct stm32_usbdev_s *priv)
   /* Reset state/data associated with the SETUP request */
 
   priv->ep0datlen = 0;
+
+  /* Dump ring buffer after SET_CONFIGURATION for debug */
+
+  if (ctrlreq.req == USB_REQ_SETCONFIGURATION && !priv->stalled)
+    {
+      usb_dbg_log('C', priv->ep0state, NULL, priv->configured);
+    }
 }
 
 /****************************************************************************
@@ -3021,9 +3029,14 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
 
           if ((doepint & OTG_DOEPINT_XFRC) != 0)
             {
-              syslog(LOG_INFO, "USB: EP%d XFRC doepint=0x%04lx raw=0x%08lx\n",
-                     epno, (unsigned long)doepint,
-                     (unsigned long)stm32_getreg(STM32_OTG_DOEPINT(epno)));
+              /* DWC2 v5.00: after XFRC, EPENA needs time to de-assert.
+               * Without this delay, the EPENA check in
+               * stm32_ep0out_ctrlsetup() reads stale EPENA=1 and
+               * skips the re-arm.
+               */
+
+              up_udelay(10);
+
               usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPOUT_XFRC),
                        (uint16_t)doepint);
 
@@ -3150,13 +3163,6 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                          USB_SIZEOF_CTRLREQ);
                   usb_dbg_log('S', priv->ep0state,
                               (const uint8_t *)&priv->ctrlreq, 0);
-
-                  syslog(LOG_INFO,
-                         "USB: SETUP DMA [%02x %02x %02x %02x %02x %02x %02x %02x]\n",
-                         priv->dma->setup_buf[0], priv->dma->setup_buf[1],
-                         priv->dma->setup_buf[2], priv->dma->setup_buf[3],
-                         priv->dma->setup_buf[4], priv->dma->setup_buf[5],
-                         priv->dma->setup_buf[6], priv->dma->setup_buf[7]);
 
                   datlen = GETUINT16(priv->ctrlreq.len);
                   if (USB_REQ_ISOUT(priv->ctrlreq.type) && datlen > 0)
@@ -3835,19 +3841,6 @@ static inline void stm32_enuminterrupt(struct stm32_usbdev_s *priv)
   stm32_ep0_configure(priv);
   stm32_ep0out_ctrlsetup(priv);
 
-  /* Debug: dump DWC2 hardware config and key DMA registers */
-
-  syslog(LOG_INFO,
-         "USB: GHWCFG2=0x%08lx GHWCFG4=0x%08lx CID=0x%08lx SNPSID=0x%08lx\n",
-         (unsigned long)getreg32(STM32_OTG_BASE + 0x0048),
-         (unsigned long)getreg32(STM32_OTG_BASE + 0x0050),
-         (unsigned long)getreg32(STM32_OTG_BASE + 0x0040),
-         (unsigned long)getreg32(STM32_OTG_BASE + 0x0044));
-  syslog(LOG_INFO,
-         "USB: DCFG=0x%08lx GDFIFOCFG=0x%08lx GINTMSK=0x%08lx\n",
-         (unsigned long)getreg32(STM32_OTG_BASE + 0x0800),
-         (unsigned long)getreg32(STM32_OTG_BASE + 0x005c),
-         (unsigned long)getreg32(STM32_OTG_BASE + 0x0018));
 }
 
 /****************************************************************************
@@ -4191,8 +4184,6 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
           /* Perform the device reset */
 
-          syslog(LOG_INFO, "USB: BUSRST gintsts=0x%08lx\n",
-                 (unsigned long)regval);
           stm32_usbreset(priv);
           usbtrace(TRACE_INTEXIT(STM32_TRACEINTID_USB), 0);
           return OK;
@@ -4202,10 +4193,6 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
       if ((regval & OTG_GINT_ENUMDNE) != 0)
         {
-          uint32_t dsts = stm32_getreg(STM32_OTG_DSTS);
-          syslog(LOG_INFO, "USB: ENUMDNE DSTS=0x%08lx speed=%s\n",
-                 (unsigned long)dsts,
-                 ((dsts >> 1) & 3) == 0 ? "HS" : "FS");
           usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_ENUMDNE),
                   (uint16_t)regval);
           stm32_enuminterrupt(priv);
