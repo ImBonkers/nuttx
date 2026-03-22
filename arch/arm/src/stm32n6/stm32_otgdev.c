@@ -2901,6 +2901,54 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
               priv->ep0state = EP0STATE_IDLE;
             }
         }
+      else if (priv->ep0state == EP0STATE_SETUP_OUT)
+        {
+          /* SETUP_OUT: waiting for OUT data phase (e.g., SET_LINE_CODING).
+           * Check DOEPTSIZ residual to distinguish real data from spurious
+           * XFRC.  The arm used XFRSIZ=24; if residual < 24, real data.
+           */
+
+#ifdef CONFIG_STM32N6_OTG_DMA
+          {
+            uint32_t remain =
+              (stm32_getreg(STM32_OTG_DOEPTSIZ(0)) &
+               OTG_DOEPTSIZ_XFRSIZ_MASK) >>
+              OTG_DOEPTSIZ_XFRSIZ_SHIFT;
+            uint32_t xfrd = (USB_SIZEOF_CTRLREQ * 3) - remain;
+
+            if (xfrd > 0)
+              {
+                /* Real OUT data received.  Copy from DMA buffer
+                 * (setup_buf, reused for data) to ep0data, then
+                 * dispatch the complete SETUP command.
+                 */
+
+                uint16_t readlen =
+                  MIN(xfrd, CONFIG_USBDEV_SETUP_MAXDATASIZE);
+
+                up_invalidate_dcache(
+                  (uintptr_t)priv->dma->setup_buf,
+                  (uintptr_t)priv->dma->setup_buf + 32);
+                __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+                memcpy(priv->ep0data, priv->dma->setup_buf, readlen);
+                priv->ep0datlen = readlen;
+
+                priv->ep0state = EP0STATE_SETUP_READY;
+                stm32_ep0out_setup(priv);
+              }
+            else
+              {
+                /* Spurious XFRC (xfrd=0) consumed PKTCNT.  The DWC2
+                 * stale state from SETUP reception is now cleared.
+                 * Re-arm EP0 OUT — the second arm should not trigger
+                 * another spurious XFRC.
+                 */
+
+                stm32_ep0out_ctrlsetup(priv);
+              }
+          }
+#endif
+        }
       else if (priv->ep0out_xfrc_expected)
         {
           usb_dbg_log('O', priv->ep0state, NULL, 0);
