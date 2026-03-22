@@ -2045,6 +2045,14 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
       {
         uint8_t *dest = privreq->req.buf + privreq->req.xfrd;
 
+        /* Invalidate cache for the DMA receive region.  Without this,
+         * dirty cache lines from previous buffer use get written back
+         * by the cache controller AFTER DMA writes, corrupting received
+         * data (e.g. 'h' → 'd', 'e' → 'd').
+         */
+
+        up_invalidate_dcache((uintptr_t)dest,
+                             (uintptr_t)dest + xfrsize);
         __asm__ __volatile__ ("dsb 0xf" : : : "memory");
         stm32_putreg((uint32_t)(uintptr_t)dest,
                      STM32_OTG_DOEPDMA(privep->epphy));
