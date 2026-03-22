@@ -220,6 +220,9 @@
 #  error "FIFO allocations exceed FIFO memory size"
 #endif
 
+#define STM32_OTG_DFIFO_DEPTH   (STM32_OTG_FIFO_SIZE / 4)
+#define STM32_OTG_EPINFO_BASE   (STM32_OTG_DFIFO_DEPTH - 2 * STM32_NENDPOINTS)
+
 #define OTG_GINT_RC_W1   (OTG_GINT_MMIS     | \
                           OTG_GINT_SOF      | \
                           OTG_GINT_ESUSP    | \
@@ -1172,7 +1175,9 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
   stm32_putreg(regval, STM32_OTG_DOEPTSIZ(0));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-  /* Buffer DMA: point DOEPDMA directly to the SETUP receive buffer. */
+  /* Buffer DMA: point DOEPDMA directly to the SETUP receive buffer.
+   * Clean+invalidate cache so DMA writes land in clean SRAM.
+   */
 
   up_clean_dcache((uintptr_t)priv->dma->setup_buf,
                   (uintptr_t)priv->dma->setup_buf + 32);
@@ -1180,18 +1185,29 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
                STM32_OTG_DOEPDMA(0));
 #endif
 
-  /* Per ST HAL USB_EP0_OutStart(): on DWC2 CID > 0x300A (ours is
-   * 0x5000), skip the CNAK+EPENA write if EP0 OUT is already enabled.
-   * Writing CNAK+EPENA when EPENA is already set triggers spurious
-   * XFRC interrupts on the DWC2 v5.00 core.
+  /* Per ST HAL USB_EP0_OutStart() and Zephyr dwc2_prep_rx():
+   *
+   * 1. Do NOT write EPENA when already set — DWC2 v5.00 fires spurious
+   *    XFRC interrupts.
+   * 2. Zephyr only writes CNAK for data/status OUT phases (bi->data or
+   *    bi->status), NOT for pure SETUP re-arm — prevents DMA lockup.
+   * 3. We use ep0out_xfrc_expected as the signal: when true, the host
+   *    will send a ZLP OUT (status stage) or data OUT, so CNAK is needed
+   *    to accept it.  When false, we're just arming for the next SETUP.
    */
 
-  if ((stm32_getreg(STM32_OTG_DOEPCTL(0)) & OTG_DOEPCTL_EPENA) == 0)
+  regval = stm32_getreg(STM32_OTG_DOEPCTL(0));
+  if ((regval & OTG_DOEPCTL_EPENA) == 0)
     {
-      regval  = stm32_getreg(STM32_OTG_DOEPCTL(0));
-      regval |= (OTG_DOEPCTL0_CNAK | OTG_DOEPCTL0_EPENA);
-      stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
+      regval |= OTG_DOEPCTL0_EPENA;
     }
+
+  if (priv->ep0out_xfrc_expected)
+    {
+      regval |= OTG_DOEPCTL0_CNAK;
+    }
+
+  stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
 }
 
 /****************************************************************************
@@ -2019,7 +2035,12 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
       stm32_putreg(regval, regaddr);
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-      /* Buffer DMA: point DOEPDMA directly to the receive buffer */
+      /* Buffer DMA: point DOEPDMA directly to the receive buffer.
+       * Pre-clean+invalidate cache so the buffer's cache lines are
+       * clean before DMA writes.  This prevents the post-DMA
+       * clean+invalidate from writing back stale cached data over
+       * the DMA data in SRAM.
+       */
 
       {
         uint8_t *dest = privreq->req.buf + privreq->req.xfrd;
@@ -2244,25 +2265,23 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
 
   usb_dbg_log('R', priv->ep0state, NULL, 0);
 
-  /* Clear the Remote Wake-up Signaling */
+  /* ST HAL USBRST handler — NO CSRST (core soft reset).
+   *
+   * Previous driver used CSRST here which required 70ms to restore
+   * GCCFG/GUSBCFG/FDMOD.  The ST HAL approach: flush TX FIFOs, clear
+   * EP state, re-arm EP0.  This takes microseconds and preserves all
+   * pending GINTSTS flags (ENUMDNE survives for ISR to process).
+   */
+
+  /* Clear remote wakeup signaling (per ST HAL) */
 
   regval = stm32_getreg(STM32_OTG_DCTL);
   regval &= ~OTG_DCTL_RWUSIG;
   stm32_putreg(regval, STM32_OTG_DCTL);
 
-  /* Flush all FIFOs.  The RxFIFO flush is critical: during bus reset
-   * (SE0), the DWC2 may queue spurious OUT status entries in the RxFIFO.
-   */
+  /* Flush all TX FIFOs (per ST HAL: USB_FlushTxFifo(0x10)) */
 
   stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_DALL);
-  stm32_rxfifo_flush();
-
-  /* Drain any remaining status entries from GRXSTSP. */
-
-  while (stm32_getreg(STM32_OTG_GINTSTS) & OTG_GINT_RXFLVL)
-    {
-      (void)stm32_getreg(STM32_OTG_GRXSTSP);
-    }
 
   /* Tell the class driver that we are disconnected. The class
    * driver should then accept any new configurations.
@@ -2278,14 +2297,28 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
   priv->epavail[0] = STM32_EP_AVAILABLE;
   priv->epavail[1] = STM32_EP_AVAILABLE;
 
-  /* Disable all end point interrupts */
+  /* Per ST HAL: clear EP interrupts, clear STALL, SNAK OUT EPs.
+   * Do NOT use EPDIS — especially not on EP0.
+   */
 
-  for (i = 0; i < STM32_NENDPOINTS ; i++)
+  for (i = 0; i < STM32_NENDPOINTS; i++)
     {
-      /* Disable endpoint interrupts */
+      /* IN endpoints: clear interrupt flags, clear STALL */
 
       stm32_putreg(0xfb7f, STM32_OTG_DIEPINT(i));
+
+      regval = stm32_getreg(STM32_OTG_DIEPCTL(i));
+      regval &= ~OTG_DIEPCTL_STALL;
+      stm32_putreg(regval, STM32_OTG_DIEPCTL(i));
+
+      /* OUT endpoints: clear interrupt flags, clear STALL, SNAK */
+
       stm32_putreg(0xfb7f, STM32_OTG_DOEPINT(i));
+
+      regval = stm32_getreg(STM32_OTG_DOEPCTL(i));
+      regval &= ~OTG_DOEPCTL_STALL;
+      regval |= OTG_DOEPCTL_SNAK;
+      stm32_putreg(regval, STM32_OTG_DOEPCTL(i));
 
       /* Return write requests to the class implementation */
 
@@ -2312,31 +2345,31 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
 
   stm32_putreg(0xffffffff, STM32_OTG_DAINT);
 
-  /* Mask all device endpoint interrupts except EP0 */
+  /* Enable EP0 IN+OUT interrupt mask (per ST HAL: |= 0x10001) */
 
   regval = (OTG_DAINT_IEP(EP0) | OTG_DAINT_OEP(EP0));
   stm32_putreg(regval, STM32_OTG_DAINTMSK);
 
-  /* Unmask OUT interrupts */
+  /* Set OUT endpoint interrupt mask (per ST HAL) */
 
   regval = (OTG_DOEPMSK_XFRCM | OTG_DOEPMSK_STUPM | OTG_DOEPMSK_EPDM |
-            OTG_DOEPMSK_AHBERR);
+            OTG_DOEPMSK_STSPHSRXM);
   stm32_putreg(regval, STM32_OTG_DOEPMSK);
 
-  /* Unmask IN interrupts */
+  /* Set IN endpoint interrupt mask (per ST HAL) */
 
   regval = (OTG_DIEPMSK_XFRCM | OTG_DIEPMSK_EPDM | OTG_DIEPMSK_TOM);
   stm32_putreg(regval, STM32_OTG_DIEPMSK);
+
+  /* Clear DIEPEMPMSK to prevent TX FIFO empty interrupt storm */
+
+  stm32_putreg(0, STM32_OTG_DIEPEMPMSK);
 
   /* Reset device address to 0 */
 
   stm32_setaddress(priv, 0);
   priv->devstate = DEVSTATE_DEFAULT;
   priv->ep0out_xfrc_expected = false;
-
-  /* Report full speed — with DSPD=FSHS, we enumerate at FS */
-
-  priv->usbdev.speed = USB_SPEED_FULL;
 
   /* Re-configure EP0 */
 
@@ -2904,17 +2937,18 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
       else if (priv->ep0state == EP0STATE_SETUP_OUT)
         {
           /* SETUP_OUT: waiting for OUT data phase (e.g., SET_LINE_CODING).
-           * Check DOEPTSIZ residual to distinguish real data from spurious
-           * XFRC.  The arm used XFRSIZ=24; if residual < 24, real data.
+           * XFRSIZ was programmed to wLength.  xfrd = wLength - residual.
            */
 
 #ifdef CONFIG_STM32N6_OTG_DMA
           {
+            uint16_t expected = GETUINT16(priv->ctrlreq.len);
             uint32_t remain =
               (stm32_getreg(STM32_OTG_DOEPTSIZ(0)) &
-               OTG_DOEPTSIZ_XFRSIZ_MASK) >>
-              OTG_DOEPTSIZ_XFRSIZ_SHIFT;
-            uint32_t xfrd = (USB_SIZEOF_CTRLREQ * 3) - remain;
+               OTG_DOEPTSIZ0_XFRSIZ_MASK) >>
+              OTG_DOEPTSIZ0_XFRSIZ_SHIFT;
+            uint32_t xfrd = (remain < expected) ?
+                            (expected - remain) : 0;
 
             if (xfrd > 0)
               {
@@ -2938,13 +2972,23 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
               }
             else
               {
-                /* Spurious XFRC (xfrd=0) consumed PKTCNT.  The DWC2
-                 * stale state from SETUP reception is now cleared.
-                 * Re-arm EP0 OUT — the second arm should not trigger
-                 * another spurious XFRC.
+                /* Spurious XFRC (xfrd=0) from DWC2 v5.00 EPENA
+                 * re-write.  EPENA is now clear.  Re-arm for DATA.
                  */
 
-                stm32_ep0out_ctrlsetup(priv);
+                uint32_t tsiz2 =
+                  (expected << OTG_DOEPTSIZ0_XFRSIZ_SHIFT) |
+                  OTG_DOEPTSIZ0_PKTCNT;
+                stm32_putreg(tsiz2, STM32_OTG_DOEPTSIZ(0));
+                stm32_putreg(
+                  (uint32_t)(uintptr_t)priv->dma->setup_buf,
+                  STM32_OTG_DOEPDMA(0));
+
+                {
+                  uint32_t ctl = stm32_getreg(STM32_OTG_DOEPCTL(0));
+                  ctl |= (OTG_DOEPCTL0_CNAK | OTG_DOEPCTL0_EPENA);
+                  stm32_putreg(ctl, STM32_OTG_DOEPCTL(0));
+                }
               }
           }
 #endif
@@ -3093,20 +3137,59 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
               stm32_putreg(OTG_DOEPINT_XFRC, STM32_OTG_DOEPINT(epno));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-              /* Per ST HAL: on XFRC with DMA, if SETUP or STUPPKTRCVD
+              /* Per ST HAL: on EP0 XFRC with DMA, if SETUP or STUPPKTRCVD
                * is also set, clear STUPPKTRCVD and skip data processing
                * (the SETUP handler below will handle it).
+               * Only applies to EP0 — STUPPKTRCVD is undefined on non-
+               * control endpoints and can be spuriously set on DWC2 v5.00.
                */
 
-              {
-                uint32_t raw = stm32_getreg(STM32_OTG_DOEPINT(epno));
-                if (raw & (OTG_DOEPINT_SETUP | OTG_DOEPINT_STUPPKTRCVD))
-                  {
-                    stm32_putreg(OTG_DOEPINT_STUPPKTRCVD,
-                                 STM32_OTG_DOEPINT(epno));
-                    goto skip_xfrc;
-                  }
-              }
+              if (epno == 0)
+                {
+                  uint32_t raw = stm32_getreg(STM32_OTG_DOEPINT(epno));
+
+                  /* Always clear spurious STUPPKTRCVD */
+
+                  if (raw & OTG_DOEPINT_STUPPKTRCVD)
+                    {
+                      stm32_putreg(OTG_DOEPINT_STUPPKTRCVD,
+                                   STM32_OTG_DOEPINT(epno));
+                    }
+
+                  /* STSPHSRX: ZLP OUT status phase received for a
+                   * device-to-host control transfer.  Per Zephyr dwc2:
+                   * clear IN NAK on EP0 IN so subsequent SETUP IN
+                   * responses can proceed.  Without this, SETUP
+                   * interrupts cease after the first IN data transfer.
+                   */
+
+                  if (raw & OTG_DOEPINT_STSPHSRXM)
+                    {
+                      uint32_t diepctl;
+
+                      stm32_putreg(OTG_DOEPINT_STSPHSRXM,
+                                   STM32_OTG_DOEPINT(epno));
+
+                      /* Clear EP0 IN NAK if set */
+
+                      diepctl = stm32_getreg(STM32_OTG_DIEPCTL(0));
+                      if (diepctl & OTG_DIEPCTL_NAKSTS)
+                        {
+                          diepctl |= OTG_DIEPCTL_CNAK;
+                          stm32_putreg(diepctl, STM32_OTG_DIEPCTL(0));
+                        }
+                    }
+
+                  /* Skip XFRC only if a real SETUP is pending and we're
+                   * NOT expecting DATA OUT (SETUP takes priority).
+                   */
+
+                  if (priv->ep0state != EP0STATE_SETUP_OUT &&
+                      (raw & OTG_DOEPINT_SETUP))
+                    {
+                      goto skip_xfrc;
+                    }
+                }
 
               /* In DMA mode, data was written directly to the request
                * buffer by the DWC2 DMA engine.  Update req.xfrd from
@@ -3232,11 +3315,42 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                            STM32_OTG_DOEPINT(epno));
 
 #ifdef CONFIG_STM32N6_OTG_DMA
-              /* Per ST HAL: re-arm EP0 OUT for next SETUP */
-
               if (epno == 0)
                 {
-                  stm32_ep0out_ctrlsetup(priv);
+                  if (priv->ep0state == EP0STATE_SETUP_OUT)
+                    {
+                      /* SETUP with DATA OUT phase (e.g., SET_LINE_CODING).
+                       * Arm EP0 OUT for data reception with XFRSIZ=wLength.
+                       */
+
+                      uint16_t dlen = GETUINT16(priv->ctrlreq.len);
+                      uint32_t tsiz =
+                        (dlen << OTG_DOEPTSIZ0_XFRSIZ_SHIFT) |
+                        OTG_DOEPTSIZ0_PKTCNT;
+                      stm32_putreg(tsiz, STM32_OTG_DOEPTSIZ(0));
+
+                      up_clean_dcache(
+                        (uintptr_t)priv->dma->setup_buf,
+                        (uintptr_t)priv->dma->setup_buf + 32);
+                      stm32_putreg(
+                        (uint32_t)(uintptr_t)priv->dma->setup_buf,
+                        STM32_OTG_DOEPDMA(0));
+
+                      regval = stm32_getreg(STM32_OTG_DOEPCTL(0));
+                      regval |= (OTG_DOEPCTL0_CNAK | OTG_DOEPCTL0_EPENA);
+                      stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
+                    }
+                  else if (priv->ep0state != EP0STATE_DATA_IN &&
+                           priv->ep0state != EP0STATE_SETUPRESPONSE)
+                    {
+                      /* Re-arm EP0 OUT for next SETUP.
+                       * Skip if the class driver already queued an EP0 IN
+                       * response (DATA_IN/SETUPRESPONSE) — the epin XFRC
+                       * handler or setupresponse will call ctrlsetup.
+                       */
+
+                      stm32_ep0out_ctrlsetup(priv);
+                    }
                 }
 #endif
             }
@@ -3292,11 +3406,11 @@ static inline void stm32_epin(struct stm32_usbdev_s *priv, uint8_t epno)
 
       if (priv->ep0state == EP0STATE_DATA_IN)
         {
-          /* Continue processing data from the EP0 OUT request queue */
+          /* Continue processing data from the EP0 IN request queue */
 
           stm32_epin_request(priv, privep);
 
-          /* If we are not actively processing an OUT request, then we
+          /* If we are not actively processing an IN request, then we
            * need to setup to receive the next control request.
            */
 
@@ -3306,6 +3420,19 @@ static inline void stm32_epin(struct stm32_usbdev_s *priv, uint8_t epno)
               stm32_ep0out_ctrlsetup(priv);
               priv->ep0state = EP0STATE_IDLE;
             }
+        }
+      else if (priv->ep0state == EP0STATE_SETUPRESPONSE)
+        {
+          /* Per ST HAL PCD_EP_IN_XFRC_int: after EP0 IN completes in
+           * SETUPRESPONSE state, re-arm EP0 OUT for the next SETUP.
+           * For device-to-host transfers (nbytes > 0), the host will
+           * send a ZLP OUT status — ep0out_xfrc_expected tracks this.
+           * For host-to-device ZLP IN status (nbytes == 0),
+           * ep0out_xfrc_expected was already set by setupresponse().
+           */
+
+          stm32_ep0out_ctrlsetup(priv);
+          priv->ep0state = EP0STATE_IDLE;
         }
 
       /* Test mode is another special case */
@@ -3611,10 +3738,11 @@ static inline void stm32_suspendinterrupt(struct stm32_usbdev_s *priv)
   uint32_t regval;
 #endif
 
-  if (g_usb_dbg_idx > 3)
-    {
-      usb_dbg_dump();
-    }
+  /* NOTE: usb_dbg_dump() was here but removed — calling syslog() over
+   * UART in interrupt context blocks the USB handler for ~1 second,
+   * causing the host to timeout and retry with a 5-second delay.
+   * Use usb_dbg_dump() from task context (e.g., NSH) for debugging.
+   */
 
   /* Notify the class driver of the suspend event */
 
@@ -4100,16 +4228,12 @@ static inline void stm32_otginterrupt(struct stm32_usbdev_s *priv)
 
 static int stm32_usbinterrupt(int irq, void *context, void *arg)
 {
-  /* At present, there is only a single OTG  device support. Hence it is
-   * pre-allocated as g_otghsdev.  However, in most code, the private data
-   * structure will be referenced using the 'priv' pointer (rather than the
-   * global data) in order to simplify any future support for multiple
-   * devices.
+  /* At present, there is only a single OTG device support. Hence it is
+   * pre-allocated as g_otghsdev.
    */
 
   struct stm32_usbdev_s *priv = &g_otghsdev;
   uint32_t regval;
-  uint32_t reserved;
 
   usbtrace(TRACE_INTENTRY(STM32_TRACEINTID_USB), 0);
 
@@ -4118,184 +4242,195 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
   DEBUGASSERT((stm32_getreg(STM32_OTG_GINTSTS) & OTG_GINTSTS_CMOD) ==
                OTG_GINTSTS_DEVMODE);
 
-  /* Get the state of all enabled interrupts.  We will do this repeatedly
-   * some interrupts (like RXFLVL) will generate additional interrupting
-   * events.
+  /* Single-pass ISR: read pending+masked interrupts once.
+   * Per ST HAL HAL_PCD_IRQHandler: each flag is cleared at the END
+   * of its handler, not bulk-cleared at the top.  This prevents
+   * losing flags (like ENUMDNE) that arrive during processing.
    */
 
-  for (; ; )
+  regval  = stm32_getreg(STM32_OTG_GINTSTS);
+  regval &= stm32_getreg(STM32_OTG_GINTMSK);
+
+  if (regval == 0)
     {
-      /* Get the set of pending, un-masked interrupts */
+      usbtrace(TRACE_INTEXIT(STM32_TRACEINTID_USB), 0);
+      return OK;
+    }
 
-      regval  = stm32_getreg(STM32_OTG_GINTSTS);
-      reserved = (regval & OTG_GINT_RESERVED);
-      regval &= stm32_getreg(STM32_OTG_GINTMSK);
+  usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_INTPENDING),
+          (uint16_t)regval);
 
-      /* With out modifying the reserved bits, acknowledge all
-       * **Writable** pending irqs we will service below
-       */
-
-      stm32_putreg(((regval | reserved) & OTG_GINT_RC_W1),
-                     STM32_OTG_GINTSTS);
-
-      /* Break out of the loop when there are no further pending (and
-       * unmasked) interrupts to be processes.
-       */
-
-      if (regval == 0)
-        {
-          break;
-        }
-
-      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_INTPENDING),
-              (uint16_t)regval);
-
-      /* OUT endpoint interrupt. The core sets this bit to indicate that an
-       * interrupt is pending on one of the OUT endpoints of the core.
-       */
-
-      if ((regval & OTG_GINT_OEP) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPOUT),
-                  (uint16_t)regval);
-          stm32_epout_interrupt(priv);
-        }
-
-      /* IN endpoint interrupt.  The core sets this bit to indicate that
-       * an interrupt is pending on one of the IN endpoints of the core.
-       */
-
-      if ((regval & OTG_GINT_IEP) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPIN),
-                  (uint16_t)regval);
-          stm32_epin_interrupt(priv);
-        }
-
-      /* Host/device mode mismatch error interrupt */
+  /* Host/device mode mismatch error interrupt */
 
 #ifdef CONFIG_DEBUG_USB
-      if ((regval & OTG_GINT_MMIS) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_MISMATCH),
-                  (uint16_t)regval);
-        }
+  if ((regval & OTG_GINT_MMIS) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_MISMATCH),
+              (uint16_t)regval);
+      stm32_putreg(OTG_GINT_MMIS, STM32_OTG_GINTSTS);
+    }
 #endif
 
-      /* Resume/remote wakeup detected interrupt */
+  /* RxFIFO non-empty interrupt.  Required even in buffer DMA mode
+   * on this DWC2 v5.00 — the core needs software to pop status
+   * entries before DOEPINT.SETUP asserts.
+   * RXFLVL is level-triggered — drain ALL entries to prevent re-fire.
+   */
 
-      if ((regval & OTG_GINT_WKUP) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_WAKEUP),
-                  (uint16_t)regval);
-          stm32_resumeinterrupt(priv);
-        }
+  while ((stm32_getreg(STM32_OTG_GINTSTS) & OTG_GINT_RXFLVL) != 0)
+    {
+      stm32_rxinterrupt(priv);
+    }
 
-      /* USB suspend interrupt */
+  /* OUT endpoint interrupt */
 
-      if ((regval & OTG_GINT_USBSUSP) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SUSPEND),
-                  (uint16_t)regval);
-          stm32_suspendinterrupt(priv);
-        }
+  if ((regval & OTG_GINT_OEP) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPOUT),
+              (uint16_t)regval);
+      stm32_epout_interrupt(priv);
+    }
 
-      /* Start of frame interrupt */
+  /* IN endpoint interrupt */
+
+  if ((regval & OTG_GINT_IEP) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPIN),
+              (uint16_t)regval);
+      stm32_epin_interrupt(priv);
+    }
+
+  /* Resume/remote wakeup detected interrupt */
+
+  if ((regval & OTG_GINT_WKUP) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_WAKEUP),
+              (uint16_t)regval);
+      stm32_resumeinterrupt(priv);
+      stm32_putreg(OTG_GINT_WKUP, STM32_OTG_GINTSTS);
+    }
+
+  /* USB suspend interrupt */
+
+  if ((regval & OTG_GINT_USBSUSP) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SUSPEND),
+              (uint16_t)regval);
+      stm32_suspendinterrupt(priv);
+      stm32_putreg(OTG_GINT_USBSUSP, STM32_OTG_GINTSTS);
+    }
+
+  /* USB reset interrupt — handle BEFORE ENUMDNE */
+
+  if ((regval & (OTG_GINT_USBRST | OTG_GINT_RSTDET)) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_DEVRESET),
+              (uint16_t)regval);
+
+      /* Perform the device reset */
+
+      stm32_usbreset(priv);
+
+      /* Clear the reset flag AFTER handling (per ST HAL) */
+
+      stm32_putreg(OTG_GINT_USBRST | OTG_GINT_RSTDET,
+                   STM32_OTG_GINTSTS);
+
+      /* Mask USBRST to prevent re-entry while host still drives SE0
+       * (10-50ms).  ENUMDNE handler will unmask USBRST.
+       */
+
+      {
+        uint32_t msk = stm32_getreg(STM32_OTG_GINTMSK);
+        msk &= ~(OTG_GINT_USBRST | OTG_GINT_RSTDET);
+        stm32_putreg(msk, STM32_OTG_GINTMSK);
+      }
+    }
+
+  /* Enumeration done interrupt */
+
+  if ((regval & OTG_GINT_ENUMDNE) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_ENUMDNE),
+              (uint16_t)regval);
+      stm32_enuminterrupt(priv);
+
+      /* Re-enable USBRST interrupt (was masked during reset) */
+
+      {
+        uint32_t msk = stm32_getreg(STM32_OTG_GINTMSK);
+        msk |= OTG_GINT_USBRST;
+        stm32_putreg(msk, STM32_OTG_GINTMSK);
+      }
+
+      stm32_putreg(OTG_GINT_ENUMDNE, STM32_OTG_GINTSTS);
+    }
+
+  /* Start of frame interrupt */
 
 #ifdef CONFIG_USBDEV_SOFINTERRUPT
-      if ((regval & OTG_GINT_SOF) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SOF),
-                  (uint16_t)regval);
-          usbdev_sof_irq(&priv->usbdev, stm32_getframe(&priv->usbdev));
-        }
+  if ((regval & OTG_GINT_SOF) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SOF),
+              (uint16_t)regval);
+      usbdev_sof_irq(&priv->usbdev, stm32_getframe(&priv->usbdev));
+      stm32_putreg(OTG_GINT_SOF, STM32_OTG_GINTSTS);
+    }
 #endif
 
-      /* RxFIFO non-empty interrupt.  Indicates that there is at least one
-       * packet pending to be read from the RxFIFO.
-       */
-
-      if ((regval & OTG_GINT_RXFLVL) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_RXFIFO),
-                  (uint16_t)regval);
-          stm32_rxinterrupt(priv);
-
-        }
-
-      /* USB reset interrupt */
-
-      if ((regval & (OTG_GINT_USBRST | OTG_GINT_RSTDET)) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_DEVRESET),
-                  (uint16_t)regval);
-
-          /* Perform the device reset */
-
-          stm32_usbreset(priv);
-          usbtrace(TRACE_INTEXIT(STM32_TRACEINTID_USB), 0);
-          return OK;
-        }
-
-      /* Enumeration done interrupt */
-
-      if ((regval & OTG_GINT_ENUMDNE) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_ENUMDNE),
-                  (uint16_t)regval);
-          stm32_enuminterrupt(priv);
-        }
-
-      /* Incomplete isochronous IN transfer interrupt.  When the core finds
-       * non-empty any of the isochronous IN endpoint FIFOs scheduled for
-       * the current frame non-empty, the core generates an IISOIXFR
-       * interrupt.
-       */
+  /* Incomplete isochronous IN transfer interrupt */
 
 #ifdef CONFIG_USBDEV_ISOCHRONOUS
-      if ((regval & OTG_GINT_IISOIXFR) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_IISOIXFR),
-                  (uint16_t)regval);
-          stm32_isocininterrupt(priv);
-        }
+  if ((regval & OTG_GINT_IISOIXFR) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_IISOIXFR),
+              (uint16_t)regval);
+      stm32_isocininterrupt(priv);
+      stm32_putreg(OTG_GINT_IISOIXFR, STM32_OTG_GINTSTS);
+    }
 
-      /* Incomplete isochronous OUT transfer.  For isochronous OUT
-       * endpoints, the XFRC interrupt may not always be asserted. If the
-       * core drops isochronous OUT data packets, the application could fail
-       * to detect the XFRC interrupt.  The incomplete Isochronous OUT data
-       * interrupt indicates that an XFRC interrupt was not asserted on at
-       * least one of the isochronous OUT endpoints. At this point, the
-       * endpoint with the incomplete transfer remains enabled, but no active
-       * transfers remain in progress on this endpoint on the USB.
-       */
+  /* Incomplete isochronous OUT transfer */
 
-      if ((regval & OTG_GINT_IISOOXFR) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_IISOOXFR),
-                  (uint16_t)regval);
-          stm32_isocoutinterrupt(priv);
-        }
+  if ((regval & OTG_GINT_IISOOXFR) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_IISOOXFR),
+              (uint16_t)regval);
+      stm32_isocoutinterrupt(priv);
+      stm32_putreg(OTG_GINT_IISOOXFR, STM32_OTG_GINTSTS);
+    }
 #endif
 
-      /* Session request/new session detected interrupt */
+  /* Disconnect detected interrupt */
+
+  if ((regval & OTG_GINT_DISC) != 0)
+    {
+      if (priv->driver)
+        {
+          CLASS_DISCONNECT(priv->driver, &priv->usbdev);
+        }
+
+      priv->usbdev.speed = USB_SPEED_UNKNOWN;
+      stm32_putreg(OTG_GINT_DISC, STM32_OTG_GINTSTS);
+    }
+
+  /* Session request/new session detected interrupt */
 
 #ifdef CONFIG_USBDEV_VBUSSENSING
-      if ((regval & OTG_GINT_SRQ) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SRQ), (uint16_t)regval);
-          stm32_sessioninterrupt(priv);
-        }
-
-      /* OTG interrupt */
-
-      if ((regval & OTG_GINT_OTG) != 0)
-        {
-          usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_OTG), (uint16_t)regval);
-          stm32_otginterrupt(priv);
-        }
-#endif
+  if ((regval & OTG_GINT_SRQ) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SRQ), (uint16_t)regval);
+      stm32_sessioninterrupt(priv);
+      stm32_putreg(OTG_GINT_SRQ, STM32_OTG_GINTSTS);
     }
+
+  /* OTG interrupt */
+
+  if ((regval & OTG_GINT_OTG) != 0)
+    {
+      usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_OTG), (uint16_t)regval);
+      stm32_otginterrupt(priv);
+    }
+#endif
 
   usbtrace(TRACE_INTEXIT(STM32_TRACEINTID_USB), 0);
   return OK;
@@ -5724,6 +5859,20 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   uint32_t address;
   int i;
 
+  /* Log DWC2 core version and FIFO depth for debugging.
+   * SNPSID is at CID+4 (offset 0x0040).
+   * GHWCFG3 is at offset 0x004C, bits 31:16 = DFIFO depth in words.
+   */
+
+  {
+    uint32_t snpsid  = getreg32(STM32_OTG_BASE + 0x0040);
+    uint32_t ghwcfg3 = getreg32(STM32_OTG_BASE + 0x004c);
+    uint32_t dfifo_depth = (ghwcfg3 >> 16) & 0xffff;
+    uinfo("DWC2 SNPSID=0x%08" PRIx32 " GHWCFG3=0x%08" PRIx32
+          " DFIFO=%"  PRIu32 " words (%"  PRIu32 " bytes)\n",
+          snpsid, ghwcfg3, dfifo_depth, dfifo_depth * 4);
+  }
+
   /* At start-up the core is in HS mode. */
 
   /* Disable global interrupts by clearing the GINTMASK bit in the GAHBCFG
@@ -5917,7 +6066,7 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   stm32_putreg(regval, STM32_OTG_DIEPTXF(8));
 #endif
 
-  /* NOTE: GDFIFOCFG is set later in the DMA section (0x3EE << 16).
+  /* NOTE: GDFIFOCFG EPInfoBase is set later in the DMA section.
    * Do not write it here — the DMA config below will set it correctly.
    */
 
@@ -5992,12 +6141,12 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
 
   /* Enable the interrupts in the INTMSK */
 
-  /* RXFLVL must be enabled even in buffer DMA mode: the DWC2 core
-   * only asserts DOEPINT.SETUP after the SETUPDONE status entry is
-   * popped from GRXSTSP.  Without RXFLVL, nothing pops the status
-   * queue and SETUP interrupts never fire.  In DMA mode, the RXFLVL
-   * handler pops status entries but skips FIFO data reads (DMA
-   * handles data transfer).
+  /* NOTE: ST HAL and Zephyr disable RXFLVL in buffer DMA mode, but
+   * this specific DWC2 v5.00 (CID 0x5000) on STM32N6 requires RXFLVL
+   * even in DMA mode.  Without it, the core does not pop SETUPDONE
+   * from the RxFIFO status queue, and DOEPINT.SETUP never asserts.
+   * The RXFLVL handler in DMA mode pops status entries but skips
+   * FIFO data reads (DMA handles data transfer).
    */
 
   regval = (OTG_GINT_RXFLVL | OTG_GINT_USBSUSP | OTG_GINT_ENUMDNE |
@@ -6054,14 +6203,19 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   modifyreg32(RIFSC_RISC_SECCFGR1, 0, (1 << 24));   /* OTG1HS Secure */
   modifyreg32(RIFSC_RISC_PRIVCFGR1, 0, (1 << 24));   /* OTG1HS Privileged */
 
-  /* Reserve 18 FIFO locations for DMA buffers per ST HAL:
-   * GDFIFOCFG[31:16] = 0x3EE (EPInfoBaseAddr), keep [15:0] intact.
+  /* Reserve 2*NENDPOINTS FIFO locations for EP info in DMA mode per
+   * DWC2 databook: EPInfoBaseAddr = DFIFODepth - 2*NumDevEps.
+   * STM32N6 DFIFODepth = 952 words (3808 bytes), 9 endpoints → 934.
+   * (0x3EE = 1006 was wrong — copied from STM32U5 which has 1024-word FIFO)
    */
+
+#define STM32_OTG_DFIFO_DEPTH   (STM32_OTG_FIFO_SIZE / 4)
+#define STM32_OTG_EPINFO_BASE   (STM32_OTG_DFIFO_DEPTH - 2 * STM32_NENDPOINTS)
 
   {
     uint32_t gdfifocfg = stm32_getreg(STM32_OTG_BASE + 0x005c);
     gdfifocfg &= ~(0xFFFFUL << 16);
-    gdfifocfg |= (0x3EEUL << 16);
+    gdfifocfg |= ((uint32_t)STM32_OTG_EPINFO_BASE << 16);
     stm32_putreg(gdfifocfg, STM32_OTG_BASE + 0x005c);
   }
 
@@ -6093,8 +6247,8 @@ void arm_usbinitialize(void)
 
 #ifdef CONFIG_STM32N6_OTG_DMA
   /* DMA buffers live in Write-Back cacheable SRAM (MPU Region 0).
-   * Cache coherency is handled via up_clean_dcache/up_invalidate_dcache
-   * around descriptor arming and completion.
+   * Cache coherency is handled via up_clean_dcache/up_invalidate_dcache.
+   * DMA buffers are 32-byte aligned (cache line size) so MVA ops work.
    */
 #endif
 
