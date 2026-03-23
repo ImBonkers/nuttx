@@ -1815,11 +1815,20 @@ static void stm32_epout_complete(struct stm32_usbdev_s *priv,
 
   usbtrace(TRACE_COMPLETE(privep->epphy), privreq->req.xfrd);
   stm32_req_complete(privep, OK);
-  privep->active = false;
 
-  /* Now set up the next read request (if any) */
+  /* Now set up the next read request (if any).
+   * Only re-arm if the callback didn't already do it.  The callback
+   * chain (cdcacm_rdcomplete → requeue → EP_SUBMIT → stm32_epout_request)
+   * may have already armed the next rdreq and set active=true.
+   * Setting active=false here would cause the outer stm32_epout_request
+   * to re-arm with a DIFFERENT rdreq, overwriting DOEPDMA and causing
+   * DMA to the wrong buffer → memory corruption.
+   */
 
-  stm32_epout_request(priv, privep);
+  if (!privep->active)
+    {
+      stm32_epout_request(priv, privep);
+    }
 }
 
 /****************************************************************************
