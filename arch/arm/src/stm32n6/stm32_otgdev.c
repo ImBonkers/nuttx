@@ -3043,6 +3043,34 @@ static inline void stm32_ep0out_setup(struct stm32_usbdev_s *priv)
   stm32_req_cancel(&priv->epout[EP0], -EPROTO);
   stm32_req_cancel(&priv->epin[EP0],  -EPROTO);
 
+  /* Fully clean up EP0 IN from the previous transaction.
+   *
+   * 1. SNAK EP0 IN to stop the DWC2 from sending stale data.
+   *    The previous transaction's ZLP may still be pending if the
+   *    host stopped issuing IN tokens before the ZLP could be sent.
+   *
+   * 2. Flush EP0 TX FIFO.  stm32_req_cancel skips the flush when
+   *    the request queue is empty, but a stale ZLP may still be in
+   *    the DWC2 TX FIFO hardware.
+   *
+   * Without both steps, the stale ZLP is sent as the response to
+   * the NEW SETUP, corrupting the control transfer protocol and
+   * causing all subsequent control transfers to time out (5s each).
+   */
+
+  {
+    uint32_t diepctl = stm32_getreg(STM32_OTG_DIEPCTL(0));
+    if (diepctl & OTG_DIEPCTL_EPENA)
+      {
+        diepctl |= OTG_DIEPCTL_SNAK | OTG_DIEPCTL_EPDIS;
+        stm32_putreg(diepctl, STM32_OTG_DIEPCTL(0));
+      }
+  }
+
+  stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(EP0));
+  priv->epin[EP0].active = false;
+  priv->ep0out_xfrc_expected = false;
+
   /* Assume NOT stalled */
 
   priv->epout[EP0].stalled = false;
@@ -3069,7 +3097,11 @@ static inline void stm32_ep0out_setup(struct stm32_usbdev_s *priv)
 
   if ((ctrlreq.type & USB_REQ_TYPE_MASK) != USB_REQ_TYPE_STANDARD)
     {
-      /* Dispatch any non-standard requests */
+      /* Dispatch any non-standard requests.  The NuttX CDC class driver
+       * handles EP0 responses internally via EP_SUBMIT — do NOT send
+       * any additional ZLP or data here, or we'd double-respond and
+       * corrupt the EP0 state machine.
+       */
 
       stm32_req_dispatch(priv, &priv->ctrlreq);
     }
@@ -4506,7 +4538,15 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
       stm32_epout_interrupt(priv);
     }
 
-  /* IN endpoint interrupt */
+  /* IN endpoint interrupt — re-read GINTSTS because OEP processing
+   * (SETUP dispatch → CLASS_SETUP → EP_SUBMIT) starts EP0 IN transfers
+   * whose XFRC appears AFTER our snapshot.  Without this re-read, the
+   * ZLP status completion is missed, EP0 OUT is never re-armed, and
+   * all subsequent control transfers time out.
+   */
+
+  regval  = stm32_getreg(STM32_OTG_GINTSTS);
+  regval &= stm32_getreg(STM32_OTG_GINTMSK);
 
   if ((regval & OTG_GINT_IEP) != 0)
     {
