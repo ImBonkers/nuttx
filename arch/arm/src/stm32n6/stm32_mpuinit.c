@@ -38,6 +38,7 @@
 #define STM32N6_AXISRAM_BASE  0x34000000
 #define STM32N6_AXISRAM_SIZE  (4 * 1024 * 1024)  /* 4 MB */
 
+
 /****************************************************************************
  * Public Functions
  ****************************************************************************/
@@ -88,6 +89,7 @@ void stm32_mpuinitialize(void)
   mpu_configure_region(STM32N6_AXISRAM_BASE, STM32N6_AXISRAM_SIZE,
                        MPU_RBAR_AP_RWNO | MPU_RBAR_SH_NO,
                        MPU_RLAR_ENABLE | MPU_RLAR_WRITE_BACK);
+
 
   /* Enable MPU with PRIVDEFENA so accesses to addresses not covered by
    * any explicit region (peripherals, PPB, etc.) use the default memory

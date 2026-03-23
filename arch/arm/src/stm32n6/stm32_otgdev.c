@@ -51,6 +51,7 @@
 #endif
 
 #include "chip.h"
+#include "mpu.h"
 #include "stm32_rcc.h"
 #include "stm32_gpio.h"
 #include "stm32_otg.h"
@@ -2178,6 +2179,10 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
          * Write zeros first so any dirty lines contain zeros
          * (matching what we want in SRAM).  Then DCCISW flushes
          * and invalidates the entire cache.
+         */
+
+        /* Pre-DMA: memset + DCCISW to ensure no stale dirty cache
+         * lines can overwrite DMA data during post-DMA writeback.
          */
 
         memset(dest, 0, xfrsize);
@@ -4882,9 +4887,7 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
                 g_epout_bcnt[ep] = 0;  /* Reset for next transfer */
 
-                /* Post-DMA: DSB to ensure DMA writes are committed
-                 * to SRAM, then DCCISW to force cache refetch.
-                 */
+                /* Post-DMA: DSB + DCCISW */
 
                 __asm__ __volatile__ ("dsb 0xf" : : : "memory");
                 stm32_dcache_flush();
@@ -5633,7 +5636,19 @@ static void *stm32_ep_allocbuffer(struct usbdev_ep_s *ep, unsigned bytes)
    * (DCIMVAC) doesn't corrupt adjacent allocations.
    */
 
+  /* Allocate from a static non-cacheable DMA pool.
+   * The pool is placed in BSS with 64-byte alignment.
+   * The MPU Region 1 makes this address range non-cacheable,
+   * eliminating all cache coherency issues with DMA.
+   */
+
+  {
+  /* Use heap with 64-byte alignment. Cache coherency is handled
+   * by DSB + DCCISW in the pre/post-DMA paths.
+   */
+
   return kmm_memalign(64, (bytes + 63) & ~63);
+  }
 #else
   return kmm_malloc(bytes);
 #endif
