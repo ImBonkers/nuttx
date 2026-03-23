@@ -1165,6 +1165,27 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
 {
   uint32_t regval;
 
+  /* If EP0 IN is stuck mid-abort (EPENA=1 + EPDIS=1), the DWC2 core
+   * freezes EP0 entirely — DOEPINT.SETUP won't assert for new SETUPs.
+   * This happens when a SETUP arrives while a ZLP IN status is pending
+   * and the host stopped sending IN tokens (port closed).  The core
+   * set EPDIS to abort the IN, but the abort can't complete because
+   * the TxFIFO still has data.  Flush the FIFO to unstick it.
+   */
+
+  regval = stm32_getreg(STM32_OTG_DIEPCTL(0));
+  if ((regval & (OTG_DIEPCTL_EPENA | OTG_DIEPCTL_EPDIS)) ==
+      (OTG_DIEPCTL_EPENA | OTG_DIEPCTL_EPDIS))
+    {
+      stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(EP0));
+
+      /* Wait for the abort to complete (EPDISD in DIEPINT0) */
+
+      while ((stm32_getreg(STM32_OTG_DIEPINT(0)) &
+              OTG_DIEPINT_EPDISD) == 0);
+      stm32_putreg(OTG_DIEPINT_EPDISD, STM32_OTG_DIEPINT(0));
+    }
+
   /* Always re-program DOEPTSIZ and DOEPDMA so the DMA buffer and
    * transfer size are correct for the next SETUP packet.
    */
@@ -1185,22 +1206,23 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
                STM32_OTG_DOEPDMA(0));
 #endif
 
-  /* Per ST HAL USB_EP0_OutStart() and Zephyr dwc2_prep_rx():
+  /* Always set EPENA to ensure EP0 OUT is armed for the next SETUP.
+   * Previous approach conditionally skipped EPENA when already set, but
+   * this could leave EP0 in a stale state where DOEPTSIZ/DOEPDMA were
+   * reprogrammed but the core didn't re-latch them (EPENA already set
+   * from previous transfer).  Result: EP0 silently dies and all future
+   * SETUP packets NAK — permanent until power cycle.
    *
-   * 1. Do NOT write EPENA when already set — DWC2 v5.00 fires spurious
-   *    XFRC interrupts.
-   * 2. Zephyr only writes CNAK for data/status OUT phases (bi->data or
-   *    bi->status), NOT for pure SETUP re-arm — prevents DMA lockup.
-   * 3. We use ep0out_xfrc_expected as the signal: when true, the host
-   *    will send a ZLP OUT (status stage) or data OUT, so CNAK is needed
-   *    to accept it.  When false, we're just arming for the next SETUP.
+   * The DWC2 v5.00 may fire spurious XFRC when EPENA is re-written,
+   * but the spurious XFRC handler now re-arms EP0, so this is safe.
+   *
+   * CNAK is only set when real OUT data is expected (ZLP status or
+   * DATA OUT phase).  For pure SETUP re-arm, NAK is correct — the
+   * DWC2 accepts SETUP packets even while NAKing regular OUT data.
    */
 
   regval = stm32_getreg(STM32_OTG_DOEPCTL(0));
-  if ((regval & OTG_DOEPCTL_EPENA) == 0)
-    {
-      regval |= OTG_DOEPCTL0_EPENA;
-    }
+  regval |= OTG_DOEPCTL0_EPENA;
 
   if (priv->ep0out_xfrc_expected)
     {
@@ -1928,6 +1950,41 @@ static inline void stm32_epout_receive(struct stm32_ep_s *privep,
   /* Update the number of bytes transferred */
 
   privreq->req.xfrd += readlen;
+
+  /* Short packet detection (non-DMA mode only):
+   * If bcnt < maxpacket, this is the last packet in the transfer.
+   * The DWC2 will fire XFRC after this, but only if pktcnt reaches 0.
+   * For multi-packet requests where the host sends fewer packets than
+   * programmed, XFRC may not fire (pktcnt > 0).  In that case, we
+   * must complete the request here to avoid a timeout.
+   *
+   * We disable the endpoint (SNAK) to stop accepting more packets,
+   * then complete the request immediately.
+   */
+
+  if (bcnt < (int)privep->ep.maxpacket && privep->epphy != EP0)
+    {
+      struct stm32_usbdev_s *priv;
+      uint32_t regval;
+
+      priv = (struct stm32_usbdev_s *)privep->dev;
+
+      /* NAK the endpoint to stop receiving */
+
+      regval  = stm32_getreg(STM32_OTG_DOEPCTL(privep->epphy));
+      regval |= OTG_DOEPCTL_SNAK;
+      stm32_putreg(regval, STM32_OTG_DOEPCTL(privep->epphy));
+
+      /* Complete the request with whatever data we have */
+
+      usbtrace(TRACE_COMPLETE(privep->epphy), privreq->req.xfrd);
+      stm32_req_complete(privep, OK);
+      privep->active = false;
+
+      /* Set up the next read request (if any) */
+
+      stm32_epout_request(priv, privep);
+    }
 }
 
 /****************************************************************************
@@ -2184,6 +2241,14 @@ static void stm32_req_cancel(struct stm32_ep_s *privep, int16_t status)
                (stm32_rqpeek(privep))->req.xfrd);
       stm32_req_complete(privep, status);
     }
+
+  /* Mark endpoint as inactive so the next EP_SUBMIT can program
+   * the hardware.  Without this, stm32_epout_request() sees
+   * active==true and skips programming, causing the next transfer
+   * to hang indefinitely.
+   */
+
+  privep->active = false;
 }
 
 /****************************************************************************
@@ -3217,7 +3282,8 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
 
                 uint32_t tsiz2 =
                   (expected << OTG_DOEPTSIZ0_XFRSIZ_SHIFT) |
-                  OTG_DOEPTSIZ0_PKTCNT;
+                  OTG_DOEPTSIZ0_PKTCNT |
+                  (3 << OTG_DOEPTSIZ0_STUPCNT_SHIFT);
                 stm32_putreg(tsiz2, STM32_OTG_DOEPTSIZ(0));
                 stm32_putreg(
                   (uint32_t)(uintptr_t)priv->dma->setup_buf,
@@ -3248,8 +3314,12 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
         {
           /* Spurious EP0 OUT XFRC (DWC2 v5.00 fires these during
            * CNAK+EPENA transitions and after bus reset recovery).
-           * Just clear the interrupt.
+           * Re-arm EP0 OUT so future SETUP packets can be received.
+           * Without this, EP0 dies and all control transfers NAK.
            */
+
+          stm32_ep0out_ctrlsetup(priv);
+          priv->ep0state = EP0STATE_IDLE;
         }
     }
 
@@ -3259,7 +3329,21 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
 
   else if (priv->devstate == DEVSTATE_CONFIGURED)
     {
-      stm32_epout_complete(priv, &priv->epout[epno]);
+      if (priv->epout[epno].active)
+        {
+          stm32_epout_complete(priv, &priv->epout[epno]);
+        }
+      else
+        {
+          /* XFRC fired but endpoint is inactive.  This can happen if a
+           * packet arrived between CNAK/EPENA re-arm and the NAK taking
+           * effect.  The data is in the DMA buffer but there's no request
+           * to receive it.  The packet is lost — log it so we know.
+           */
+
+          usbtrace(TRACE_DEVERROR(STM32_TRACEERR_EPOUTUNEXPECTED),
+                   epno);
+        }
     }
 }
 
@@ -3360,13 +3444,6 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
 
           if ((doepint & OTG_DOEPINT_XFRC) != 0)
             {
-              /* DWC2 v5.00: after XFRC, EPENA needs time to de-assert.
-               * Without this delay, the EPENA check in
-               * stm32_ep0out_ctrlsetup() reads stale EPENA=1 and
-               * skips the re-arm.
-               */
-
-              up_udelay(10);
 
               usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPOUT_XFRC),
                        (uint16_t)doepint);
@@ -3565,7 +3642,8 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                       uint16_t dlen = GETUINT16(priv->ctrlreq.len);
                       uint32_t tsiz =
                         (dlen << OTG_DOEPTSIZ0_XFRSIZ_SHIFT) |
-                        OTG_DOEPTSIZ0_PKTCNT;
+                        OTG_DOEPTSIZ0_PKTCNT |
+                        (3 << OTG_DOEPTSIZ0_STUPCNT_SHIFT);
                       stm32_putreg(tsiz, STM32_OTG_DOEPTSIZ(0));
 
                       up_clean_dcache(
@@ -3579,13 +3657,15 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                       regval |= (OTG_DOEPCTL0_CNAK | OTG_DOEPCTL0_EPENA);
                       stm32_putreg(regval, STM32_OTG_DOEPCTL(0));
                     }
-                  else if (priv->ep0state != EP0STATE_DATA_IN &&
-                           priv->ep0state != EP0STATE_SETUPRESPONSE)
+                  else
                     {
-                      /* Re-arm EP0 OUT for next SETUP.
-                       * Skip if the class driver already queued an EP0 IN
-                       * response (DATA_IN/SETUPRESPONSE) — the epin XFRC
-                       * handler or setupresponse will call ctrlsetup.
+                      /* Always re-arm EP0 OUT for next SETUP, even when
+                       * an EP0 IN response is pending (DATA_IN or
+                       * SETUPRESPONSE).  Previously we deferred re-arming
+                       * to the EPIN XFRC handler, but if the host closes
+                       * the port before ACKing the IN ZLP status, EPIN
+                       * XFRC never fires and EP0 OUT dies permanently.
+                       * DOEPCTL0 EPENA=0 + DIEPCTL0 EPENA=1,EPDIS=1.
                        */
 
                       stm32_ep0out_ctrlsetup(priv);
@@ -4510,9 +4590,8 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
     }
 #endif
 
-  /* RxFIFO non-empty interrupt.  Required even in buffer DMA mode
-   * on this DWC2 v5.00 — the core needs software to pop status
-   * entries before DOEPINT.SETUP asserts.
+  /* RxFIFO non-empty interrupt.  Required in both PIO and buffer DMA
+   * mode — see comment at GINTMSK setup for why DMA still needs this.
    * RXFLVL is level-triggered — drain ALL entries to prevent re-fire.
    */
 
@@ -4520,6 +4599,47 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
     {
       stm32_rxinterrupt(priv);
     }
+
+  /* After RXFLVL drain, check if EP0 IN has a stuck or pending transfer.
+   * When a new SETUP arrives while EP0 IN has a pending ZLP (status
+   * phase the host never ACKed), the DWC2 core freezes EP0 and won't
+   * assert DOEPINT.SETUP until the IN transfer is aborted.  Abort it
+   * proactively here BEFORE we process OEP.
+   *
+   * We check DOEPINT0 for STUPPKTRCVD OR SETUP — either indicates
+   * a new SETUP arrived.  We also check DIEPCTL0 for EPDIS (hardware
+   * already trying to abort) as a fallback.
+   */
+
+  {
+    uint32_t diepctl0 = stm32_getreg(STM32_OTG_DIEPCTL(0));
+
+    if ((diepctl0 & OTG_DIEPCTL_EPENA) != 0)
+      {
+        uint32_t doepint0 = stm32_getreg(STM32_OTG_DOEPINT(0));
+
+        if ((doepint0 & (OTG_DOEPINT_STUPPKTRCVD | OTG_DOEPINT_SETUP)) ||
+            (diepctl0 & OTG_DIEPCTL_EPDIS))
+          {
+            /* New SETUP pending or core already aborting — flush and
+             * complete the abort so the core can process the SETUP.
+             */
+
+            if ((diepctl0 & OTG_DIEPCTL_EPDIS) == 0)
+              {
+                stm32_putreg(diepctl0 | OTG_DIEPCTL_EPDIS |
+                             OTG_DIEPCTL_SNAK,
+                             STM32_OTG_DIEPCTL(0));
+              }
+
+            stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(EP0));
+
+            while ((stm32_getreg(STM32_OTG_DIEPINT(0)) &
+                    OTG_DIEPINT_EPDISD) == 0);
+            stm32_putreg(OTG_DIEPINT_EPDISD, STM32_OTG_DIEPINT(0));
+          }
+      }
+  }
 
   /* Re-read GINTSTS after RXFLVL drain: popping SETUPDONE from the
    * RxFIFO causes DOEPINT.SETUP to assert, which sets OEP in GINTSTS.
@@ -6394,14 +6514,16 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   regval &=  OTG_GINT_RESERVED;
   stm32_putreg(regval | OTG_GINT_RC_W1, STM32_OTG_GINTSTS);
 
-  /* Enable the interrupts in the INTMSK */
-
-  /* NOTE: ST HAL and Zephyr disable RXFLVL in buffer DMA mode, but
-   * this specific DWC2 v5.00 (CID 0x5000) on STM32N6 requires RXFLVL
-   * even in DMA mode.  Without it, the core does not pop SETUPDONE
-   * from the RxFIFO status queue, and DOEPINT.SETUP never asserts.
+  /* Enable the interrupts in the INTMSK.
+   *
+   * RXFLVL is required even in buffer DMA mode on this DWC2 v5.00.
+   * The DWC2 core queues status entries (SETUPRECVD, SETUPDONE, etc.)
+   * in the RxFIFO status queue regardless of DMA mode.  Per the DWC2
+   * databook, DOEPINT.SETUP only asserts AFTER software pops the
+   * SETUPDONE entry by reading GRXSTSP.  Without RXFLVL, nothing
+   * triggers the pop, and SETUP packets are never dispatched.
    * The RXFLVL handler in DMA mode pops status entries but skips
-   * FIFO data reads (DMA handles data transfer).
+   * FIFO data reads (DMA handles data transfer to SRAM directly).
    */
 
   regval = (OTG_GINT_RXFLVL | OTG_GINT_USBSUSP | OTG_GINT_ENUMDNE |

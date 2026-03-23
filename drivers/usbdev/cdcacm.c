@@ -2939,8 +2939,16 @@ static bool cdcuart_txempty(FAR struct uart_dev_s *dev)
 
   flags = spin_lock_irqsave(&priv->lock);
 
-  if (dev->disconnected)
+  if (dev->disconnected ||
+      !(priv->ctrlline & CDC_DTE_PRESENT))
     {
+      /* If USB is disconnected or host dropped DTR (port closed),
+       * there's no host polling the IN endpoint.  Pending IN
+       * transfers will never complete.  Report TX empty so the
+       * serial close doesn't block for 5 seconds waiting for
+       * transfers that can never finish.
+       */
+
       spin_unlock_irqrestore(&priv->lock, flags);
       return true;
     }
@@ -2948,6 +2956,14 @@ static bool cdcuart_txempty(FAR struct uart_dev_s *dev)
   priv->ispolling = true;
   EP_POLL(ep);
   priv->ispolling = false;
+
+  /* Release the lock before re-acquiring — the first lock from above
+   * must be released so interrupts can fire between EP_POLL and the
+   * nwrq check.  Without this, interrupts stay disabled and USB
+   * transfer completions (which update nwrq) can never fire.
+   */
+
+  spin_unlock_irqrestore(&priv->lock, flags);
 
   /* When all of the allocated write requests have been returned to the
    * txfree, then there is no longer any TX data in flight.
