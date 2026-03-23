@@ -834,6 +834,7 @@ static struct stm32_usbdev_s g_otghsdev;
  */
 
 uint32_t g_usb_ep0_cnt[8];
+uint32_t g_usb_dma_dump[16]; /* First 64 bytes of first DMA transfer */
 
 /* M55 Secure: DCIMVAC is unreliable (pitfall #32). Use DCCISW
  * (clean+invalidate by set/way) for USB DMA cache coherency.
@@ -4845,14 +4846,14 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
                     privep->ep.maxpacket - 1) /
                    privep->ep.maxpacket) * privep->ep.maxpacket;
 
-                if (xfrsiz_remain <= xfrsiz_orig)
+                if (xfrsiz_remain < xfrsiz_orig)
                   {
                     xfrd = xfrsiz_orig - xfrsiz_remain;
                   }
                 else
                   {
-                    /* XFRSIZ garbage — assume maxpacket received.
-                     * Cap to remaining request length.
+                    /* XFRSIZ unchanged or garbage — PKTCNT reached 0
+                     * so data WAS received.  Assume maxpacket.
                      */
 
                     xfrd = privep->ep.maxpacket;
@@ -4862,15 +4863,29 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
                       }
                   }
 
-                /* Post-DMA: skip cache invalidation for now to
-                 * isolate whether DCIMVAC or wrong DMA address is
-                 * causing the crash.  DMA writes directly to SRAM,
-                 * so data may be stale in cache but readable.
-                 */
+                if (xfrd > 0)
+                  {
+                    /* Post-DMA: clean+invalidate cache so CPU reads
+                     * fresh DMA data.  DCIMVAC is broken on M55
+                     * Secure, use DCCISW (set/way) instead.
+                     */
+
+                    stm32_dcache_flush();
+                  }
 
                 privreq->req.xfrd += xfrd;
 
-                if (ep == 3) g_usb_ep0_cnt[6]++;
+                if (ep == 3)
+                  {
+                    g_usb_ep0_cnt[6]++;
+                    if (g_usb_ep0_cnt[6] == 1)
+                      {
+                        /* Capture first 64 bytes of first transfer */
+
+                        memcpy(g_usb_dma_dump, privreq->req.buf, 64);
+                      }
+                  }
+
                 stm32_epout_complete(priv, privep);
               }
           }
