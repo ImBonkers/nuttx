@@ -835,6 +835,32 @@ static struct stm32_usbdev_s g_otghsdev;
 
 uint32_t g_usb_ep0_cnt[8];
 
+/* M55 Secure: DCIMVAC is unreliable (pitfall #32). Use DCCISW
+ * (clean+invalidate by set/way) for USB DMA cache coherency.
+ */
+
+static void stm32_dcache_flush(void)
+{
+  uint32_t ccsidr = getreg32(0xe000ed80);
+  uint32_t sets   = (ccsidr >> 13) & 0x7fff;
+  uint32_t sshift = ((ccsidr & 7) + 2) + 2;
+  uint32_t ways   = (ccsidr >> 3) & 0x3ff;
+  uint32_t wshift = __builtin_clz(ways) & 0x1f;
+
+  __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+  do
+    {
+      int32_t tmpways = ways;
+      do
+        {
+          putreg32(((tmpways << wshift) | (sets << sshift)), 0xe000ef74);
+        }
+      while (tmpways--);
+    }
+  while (sets--);
+  __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+}
+
 /* Index: 0=SETUP_RXFLVL, 1=SETUP_DONE, 2=SETUP_DOEPINT,
  *        3=EP0IN_XFRC, 4=EP0IN_ABORT, 5=EP0OUT_REARM,
  *        6=EP3OUT_XFRC, 7=EP3OUT_NAK
@@ -1814,16 +1840,18 @@ static void stm32_epout_complete(struct stm32_usbdev_s *priv,
    */
 
   usbtrace(TRACE_COMPLETE(privep->epphy), privreq->req.xfrd);
+
+  /* Set active=false BEFORE the callback so that the callback's
+   * requeue path (EP_SUBMIT → stm32_epout_request) sees active=false
+   * and can properly arm the endpoint.  Without this, the callback's
+   * stm32_epout_request sees active=true → skips arming → endpoint
+   * never re-armed → PKTCNT stays 0 → infinite poll loop.
+   */
+
+  privep->active = false;
   stm32_req_complete(privep, OK);
 
-  /* Now set up the next read request (if any).
-   * Only re-arm if the callback didn't already do it.  The callback
-   * chain (cdcacm_rdcomplete → requeue → EP_SUBMIT → stm32_epout_request)
-   * may have already armed the next rdreq and set active=true.
-   * Setting active=false here would cause the outer stm32_epout_request
-   * to re-arm with a DIFFERENT rdreq, overwriting DOEPDMA and causing
-   * DMA to the wrong buffer → memory corruption.
-   */
+  /* Re-arm only if the callback didn't already do it. */
 
   if (!privep->active)
     {
@@ -4839,13 +4867,14 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
                                   privreq->req.xfrd),
                       (uintptr_t)(privreq->req.buf +
                                   privreq->req.xfrd + xfrd));
+                    __asm__ __volatile__ ("dsb 0xf" : : : "memory");
                   }
 
                 privreq->req.xfrd += xfrd;
-              }
 
-            if (ep == 3) g_usb_ep0_cnt[6]++;
-            stm32_epout_complete(priv, privep);
+                if (ep == 3) g_usb_ep0_cnt[6]++;
+                stm32_epout_complete(priv, privep);
+              }
           }
       }
   }
@@ -5572,6 +5601,12 @@ static void *stm32_ep_allocbuffer(struct usbdev_ep_s *ep, unsigned bytes)
 
 #ifdef CONFIG_USBDEV_DMAMEMORY
   return usbdev_dma_alloc(bytes);
+#elif defined(CONFIG_STM32N6_OTG_DMA)
+  /* Cache-line align DMA buffers (32 bytes) so up_invalidate_dcache
+   * (DCIMVAC) doesn't corrupt adjacent allocations.
+   */
+
+  return kmm_memalign(32, (bytes + 31) & ~31);
 #else
   return kmm_malloc(bytes);
 #endif

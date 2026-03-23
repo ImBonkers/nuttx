@@ -1089,7 +1089,22 @@ static void cdcacm_rdcomplete(FAR struct usbdev_ep_s *ep,
       {
         usbtrace(TRACE_CLASSRDCOMPLETE, priv->nrdq);
 
-        /* Place the incoming packet at the end of pending RX packet list. */
+        /* If RX is disabled (serial port closed), discard the data
+         * and immediately requeue the request.  This keeps the bulk
+         * OUT endpoint armed so it never permanently NAKs the host.
+         * Without this, rdreqs pile up in rxpending and the endpoint
+         * runs out — matching Linux gadget f_acm.c behavior.
+         */
+
+        if (!priv->rxenabled)
+          {
+            cdcacm_requeue_rdrequest(priv, rdcontainer);
+            break;
+          }
+
+        /* Place the incoming packet at the end of pending RX packet
+         * list.
+         */
 
         flags = spin_lock_irqsave(&priv->lock);
         rdcontainer->offset = 0;
