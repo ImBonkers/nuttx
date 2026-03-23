@@ -793,6 +793,7 @@ static int         stm32_epin_setstall(struct stm32_ep_s *privep);
 static int         stm32_ep_setstall(struct stm32_ep_s *privep);
 static int         stm32_ep_clrstall(struct stm32_ep_s *privep);
 static int         stm32_ep_stall(struct usbdev_ep_s *ep, bool resume);
+static void        stm32_ep_poll(struct usbdev_ep_s *ep);
 static void        stm32_ep0_stall(struct stm32_usbdev_s *priv);
 
 /* Endpoint allocation */
@@ -828,6 +829,17 @@ static void        stm32_hwinitialize(struct stm32_usbdev_s *priv);
 
 static struct stm32_usbdev_s g_otghsdev;
 
+/* Debug counters for USB EP0 diagnosis — accessible from user apps
+ * via direct memory read at the address of g_usb_dbg.
+ */
+
+uint32_t g_usb_ep0_cnt[8];
+
+/* Index: 0=SETUP_RXFLVL, 1=SETUP_DONE, 2=SETUP_DOEPINT,
+ *        3=EP0IN_XFRC, 4=EP0IN_ABORT, 5=EP0OUT_REARM,
+ *        6=EP3OUT_XFRC, 7=EP3OUT_NAK
+ */
+
 static const struct usbdev_epops_s g_epops =
 {
   .configure   = stm32_ep_configure,
@@ -841,6 +853,7 @@ static const struct usbdev_epops_s g_epops =
   .submit      = stm32_ep_submit,
   .cancel      = stm32_ep_cancel,
   .stall       = stm32_ep_stall,
+  .poll        = stm32_ep_poll,
 };
 
 static const struct usbdev_ops_s g_devops =
@@ -1185,6 +1198,8 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
               OTG_DIEPINT_EPDISD) == 0);
       stm32_putreg(OTG_DIEPINT_EPDISD, STM32_OTG_DIEPINT(0));
     }
+
+  g_usb_ep0_cnt[5]++;
 
   /* Always re-program DOEPTSIZ and DOEPDMA so the DMA buffer and
    * transfer size are correct for the next SETUP packet.
@@ -2012,12 +2027,30 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
    * in the request queue.
    */
 
-  if (!privep->active)
+  if (privep->active)
     {
-      /* Loop until a valid request is found (or the request queue is empty).
-       * The loop is only need to look at the request queue again is an
-       * invalid read request is encountered.
+      /* Endpoint already has an active transfer.  Ensure NAK is cleared
+       * so the endpoint accepts data.  After serial port close+reopen,
+       * the DWC2 may have set NAKSTS from a previous transfer completion
+       * while rdreqs are still armed on the endpoint.  Without CNAK,
+       * the endpoint permanently NAKs all host writes.
        */
+
+      uint32_t doepctl = stm32_getreg(STM32_OTG_DOEPCTL(privep->epphy));
+      if ((doepctl & OTG_DOEPCTL_EPENA) != 0 &&
+          (doepctl & OTG_DOEPCTL_NAKSTS) != 0)
+        {
+          doepctl |= OTG_DOEPCTL_CNAK;
+          stm32_putreg(doepctl, STM32_OTG_DOEPCTL(privep->epphy));
+        }
+
+      return;
+    }
+
+  /* Loop until a valid request is found (or the request queue is empty).
+   * The loop is only need to look at the request queue again is an
+   * invalid read request is encountered.
+   */
 
       for (; ; )
         {
@@ -2152,10 +2185,9 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
        * normal SETUP processing.
        */
 
-      if (privep->epphy == EP0)
-        {
-          priv->ep0state = EP0STATE_DATA_OUT;
-        }
+  if (privep->epphy == EP0)
+    {
+      priv->ep0state = EP0STATE_DATA_OUT;
     }
 }
 
@@ -3579,6 +3611,7 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
 
           if ((doepint & OTG_DOEPINT_SETUP) != 0)
             {
+              g_usb_ep0_cnt[2]++;
               usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPOUT_SETUP),
                         priv->ep0state);
 
@@ -4206,6 +4239,7 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
 
         case OTG_GRXSTSD_PKTSTS_SETUPDONE:
           {
+            g_usb_ep0_cnt[1]++;
             usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SETUPDONE), epphy);
 
 #ifdef CONFIG_STM32N6_OTG_DMA
@@ -4241,6 +4275,7 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
           {
             uint16_t datlen;
 
+            g_usb_ep0_cnt[0]++;
             usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SETUPRECVD), epphy);
 
 #ifdef CONFIG_STM32N6_OTG_DMA
@@ -4600,44 +4635,34 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
       stm32_rxinterrupt(priv);
     }
 
-  /* After RXFLVL drain, check if EP0 IN has a stuck or pending transfer.
-   * When a new SETUP arrives while EP0 IN has a pending ZLP (status
-   * phase the host never ACKed), the DWC2 core freezes EP0 and won't
-   * assert DOEPINT.SETUP until the IN transfer is aborted.  Abort it
-   * proactively here BEFORE we process OEP.
+  /* After RXFLVL drain, check if the DWC2 core is stuck mid-abort on
+   * EP0 IN.  When a new SETUP arrives while EP0 IN has a pending
+   * transfer, the core sets EPDIS to abort it.  But if the TxFIFO
+   * still has data and the host isn't sending IN tokens (port closed),
+   * the abort can't complete and EP0 freezes — DOEPINT.SETUP won't
+   * assert.  Flush the TxFIFO to unstick it.
    *
-   * We check DOEPINT0 for STUPPKTRCVD OR SETUP — either indicates
-   * a new SETUP arrived.  We also check DIEPCTL0 for EPDIS (hardware
-   * already trying to abort) as a fallback.
+   * IMPORTANT: Only act when EPDIS is already set by the hardware.
+   * Do NOT proactively abort on STUPPKTRCVD alone — that fires during
+   * normal back-to-back SETUPs (e.g., SET_LINE_CODING immediately
+   * followed by SET_CONTROL_LINE_STATE) where the IN ZLP status is
+   * still being processed legitimately.
    */
 
   {
     uint32_t diepctl0 = stm32_getreg(STM32_OTG_DIEPCTL(0));
 
-    if ((diepctl0 & OTG_DIEPCTL_EPENA) != 0)
+    if ((diepctl0 & (OTG_DIEPCTL_EPENA | OTG_DIEPCTL_EPDIS)) ==
+        (OTG_DIEPCTL_EPENA | OTG_DIEPCTL_EPDIS))
       {
-        uint32_t doepint0 = stm32_getreg(STM32_OTG_DOEPINT(0));
+        /* Core is trying to abort EP0 IN but stuck — flush TxFIFO */
 
-        if ((doepint0 & (OTG_DOEPINT_STUPPKTRCVD | OTG_DOEPINT_SETUP)) ||
-            (diepctl0 & OTG_DIEPCTL_EPDIS))
-          {
-            /* New SETUP pending or core already aborting — flush and
-             * complete the abort so the core can process the SETUP.
-             */
+        g_usb_ep0_cnt[4]++;
+        stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(EP0));
 
-            if ((diepctl0 & OTG_DIEPCTL_EPDIS) == 0)
-              {
-                stm32_putreg(diepctl0 | OTG_DIEPCTL_EPDIS |
-                             OTG_DIEPCTL_SNAK,
-                             STM32_OTG_DIEPCTL(0));
-              }
-
-            stm32_txfifo_flush(OTG_GRSTCTL_TXFNUM_D(EP0));
-
-            while ((stm32_getreg(STM32_OTG_DIEPINT(0)) &
-                    OTG_DIEPINT_EPDISD) == 0);
-            stm32_putreg(OTG_DIEPINT_EPDISD, STM32_OTG_DIEPINT(0));
-          }
+        while ((stm32_getreg(STM32_OTG_DIEPINT(0)) &
+                OTG_DIEPINT_EPDISD) == 0);
+        stm32_putreg(OTG_DIEPINT_EPDISD, STM32_OTG_DIEPINT(0));
       }
   }
 
@@ -5752,6 +5777,34 @@ static int stm32_ep_stall(struct usbdev_ep_s *ep, bool resume)
   leave_critical_section(flags);
 
   return ret;
+}
+
+/****************************************************************************
+ * Name: stm32_ep_poll
+ *
+ * Description:
+ *   Clear NAK on an OUT endpoint so it can accept data.  This is needed
+ *   after the device serial port is closed and reopened — the DWC2 sets
+ *   NAKSTS after each transfer completion, and if no new EP_SUBMIT happens
+ *   (rdreqs are already armed), nobody writes CNAK.
+ *
+ ****************************************************************************/
+
+static void stm32_ep_poll(struct usbdev_ep_s *ep)
+{
+  struct stm32_ep_s *privep = (struct stm32_ep_s *)ep;
+  uint32_t regval;
+
+  if (!privep->isin)
+    {
+      regval = stm32_getreg(STM32_OTG_DOEPCTL(privep->epphy));
+      if ((regval & OTG_DOEPCTL_EPENA) != 0 &&
+          (regval & OTG_DOEPCTL_NAKSTS) != 0)
+        {
+          regval |= OTG_DOEPCTL_CNAK;
+          stm32_putreg(regval, STM32_OTG_DOEPCTL(privep->epphy));
+        }
+    }
 }
 
 /****************************************************************************

@@ -658,9 +658,21 @@ static int cdcacm_release_rxpending(FAR struct cdcacm_dev_s *priv)
       ret = OK;
 
 #ifndef CONFIG_CDCACM_DISABLE_RXBUF
-      if (!sq_empty(&priv->rxpending))
+      while (!sq_empty(&priv->rxpending))
         {
           uart_recvchars_dma(&priv->serdev);
+
+          /* uart_recvchars_dma processes one rdcontainer.  If the
+           * serial rxbuffer is full, it returns without consuming
+           * the rdcontainer — break to avoid infinite loop.
+           */
+
+          if (priv->serdev.recv.head + 1 == priv->serdev.recv.tail ||
+              (priv->serdev.recv.head + 1 == priv->serdev.recv.size &&
+               priv->serdev.recv.tail == 0))
+            {
+              break;
+            }
         }
 #else
       cdcacm_rcvpacket(priv);
@@ -2698,6 +2710,17 @@ static void cdcuart_rxint(FAR struct uart_dev_s *dev, bool enable)
        */
 
       cdcacm_release_rxpending(priv);
+
+      /* Clear NAK on the bulk OUT endpoint.  After close+reopen of
+       * the device serial port, the DWC2 may have NAKSTS=1 from a
+       * completed transfer while rdreqs are still armed on the
+       * endpoint.  EP_POLL writes CNAK so the endpoint accepts data.
+       */
+
+      if (priv->epbulkout)
+        {
+          EP_POLL(priv->epbulkout);
+        }
     }
 
   /* RX "interrupts" are disabled.  Nothing special needs to be done on a
