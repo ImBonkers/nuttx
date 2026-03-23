@@ -996,6 +996,8 @@ static int cdcacm_setconfig(FAR struct cdcacm_dev_s *priv, uint8_t config)
   for (i = 0; i < CONFIG_CDCACM_NRDREQS; i++)
     {
       req           = priv->rdreqs[i].req;
+      req->len      = MIN(CONFIG_CDCACM_BULKOUT_REQLEN,
+                          priv->epbulkout->maxpacket);
       req->callback = cdcacm_rdcomplete;
       ret           = EP_SUBMIT(priv->epbulkout, req);
       if (ret != OK)
@@ -1093,8 +1095,8 @@ static void cdcacm_rdcomplete(FAR struct usbdev_ep_s *ep,
         sq_addlast((FAR sq_entry_t *)rdcontainer, &priv->rxpending);
         spin_unlock_irqrestore(&priv->lock, flags);
 
-        /* Then process all pending RX packet starting at the head of the
-         * list
+        /* Then process all pending RX packet starting at the head of
+         * the list
          */
 
         cdcacm_release_rxpending(priv);
@@ -2710,17 +2712,6 @@ static void cdcuart_rxint(FAR struct uart_dev_s *dev, bool enable)
        */
 
       cdcacm_release_rxpending(priv);
-
-      /* Clear NAK on the bulk OUT endpoint.  After close+reopen of
-       * the device serial port, the DWC2 may have NAKSTS=1 from a
-       * completed transfer while rdreqs are still armed on the
-       * endpoint.  EP_POLL writes CNAK so the endpoint accepts data.
-       */
-
-      if (priv->epbulkout)
-        {
-          EP_POLL(priv->epbulkout);
-        }
     }
 
   /* RX "interrupts" are disabled.  Nothing special needs to be done on a

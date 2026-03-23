@@ -2029,21 +2029,6 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
 
   if (privep->active)
     {
-      /* Endpoint already has an active transfer.  Ensure NAK is cleared
-       * so the endpoint accepts data.  After serial port close+reopen,
-       * the DWC2 may have set NAKSTS from a previous transfer completion
-       * while rdreqs are still armed on the endpoint.  Without CNAK,
-       * the endpoint permanently NAKs all host writes.
-       */
-
-      uint32_t doepctl = stm32_getreg(STM32_OTG_DOEPCTL(privep->epphy));
-      if ((doepctl & OTG_DOEPCTL_EPENA) != 0 &&
-          (doepctl & OTG_DOEPCTL_NAKSTS) != 0)
-        {
-          doepctl |= OTG_DOEPCTL_CNAK;
-          stm32_putreg(doepctl, STM32_OTG_DOEPCTL(privep->epphy));
-        }
-
       return;
     }
 
@@ -2176,6 +2161,11 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
 
       regval |= (OTG_DOEPCTL_CNAK | OTG_DOEPCTL_EPENA);
       stm32_putreg(regval, regaddr);
+
+      if (privep->epphy == 3)
+        {
+          g_usb_ep0_cnt[7]++;  /* EP3 OUT armed counter */
+        }
 
       /* A transfer is now active on this endpoint */
 
@@ -3476,6 +3466,10 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
 
           if ((doepint & OTG_DOEPINT_XFRC) != 0)
             {
+              if (epno == 3)
+                {
+                  g_usb_ep0_cnt[6]++;  /* EP3 OUT XFRC counter */
+                }
 
               usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_EPOUT_XFRC),
                        (uint16_t)doepint);
@@ -4161,6 +4155,10 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
 
   epphy  = (regval & OTG_GRXSTSD_EPNUM_MASK) >> OTG_GRXSTSD_EPNUM_SHIFT;
 
+  /* Count ALL RXFLVL pops — if this stays 0, RXFLVL never fires */
+
+  g_usb_ep0_cnt[0]++;  /* Repurpose: total RXFLVL pops */
+
   if (epphy < STM32_NENDPOINTS)
     {
       privep = &priv->epout[epphy];
@@ -4192,6 +4190,7 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
 
         case OTG_GRXSTSD_PKTSTS_OUTRECVD:
           {
+            if (epphy == 3) g_usb_ep0_cnt[1]++;  /* EP3 OUTRECVD */
             usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_OUTRECVD), epphy);
             bcnt = (regval & OTG_GRXSTSD_BCNT_MASK) >>
                     OTG_GRXSTSD_BCNT_SHIFT;
@@ -4222,7 +4221,76 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
 
         case OTG_GRXSTSD_PKTSTS_OUTDONE:
           {
+            if (epphy == 3) g_usb_ep0_cnt[3]++;  /* EP3 OUTDONE (slot 3) */
             usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_OUTDONE), epphy);
+
+#ifdef CONFIG_STM32N6_OTG_DMA
+            /* DWC2 v5.00 buffer DMA: DOEPINT.XFRC is NOT set for bulk
+             * OUT endpoints on this core.  The data IS transferred via
+             * DMA (PKTCNT decrements, DMA writes to buffer) but XFRC
+             * never fires.  Handle transfer completion HERE when
+             * OUTDONE is popped, for non-EP0 endpoints.
+             *
+             * EP0 OUTDONE is handled by the existing DOEPINT.SETUP/XFRC
+             * path which works correctly (SETUP fires via RXFLVL pop).
+             */
+
+            if (epphy != EP0 && privep->active)
+              {
+                struct stm32_req_s *privreq = stm32_rqpeek(privep);
+
+                if (privreq != NULL)
+                  {
+                    uint32_t doeptsiz;
+                    uint32_t xfrsiz_remain;
+                    uint32_t xfrsiz_orig;
+                    uint32_t xfrd;
+
+                    doeptsiz = stm32_getreg(
+                      STM32_OTG_DOEPTSIZ(epphy));
+                    xfrsiz_remain =
+                      (doeptsiz & OTG_DOEPTSIZ_XFRSIZ_MASK) >>
+                      OTG_DOEPTSIZ_XFRSIZ_SHIFT;
+                    xfrsiz_orig =
+                      ((privreq->req.len - privreq->req.xfrd +
+                        privep->ep.maxpacket - 1) /
+                       privep->ep.maxpacket) * privep->ep.maxpacket;
+
+                    /* Handle XFRSIZ underflow — DWC2 v5.00 may wrap */
+
+                    if (xfrsiz_remain <= xfrsiz_orig)
+                      {
+                        xfrd = xfrsiz_orig - xfrsiz_remain;
+                      }
+                    else
+                      {
+                        /* Underflow: compute from 19-bit wrap */
+
+                        xfrd = xfrsiz_orig +
+                               (0x80000 - xfrsiz_remain);
+                        if (xfrd > privep->ep.maxpacket)
+                          {
+                            xfrd = privep->ep.maxpacket;
+                          }
+                      }
+
+                    if (xfrd > 0)
+                      {
+                        up_invalidate_dcache(
+                          (uintptr_t)(privreq->req.buf +
+                                      privreq->req.xfrd),
+                          (uintptr_t)(privreq->req.buf +
+                                      privreq->req.xfrd + xfrd));
+                      }
+
+                    privreq->req.xfrd += xfrd;
+                    g_usb_ep0_cnt[6]++;  /* EP3 completion counter */
+                  }
+
+                stm32_epout_complete(
+                  (struct stm32_usbdev_s *)privep->dev, privep);
+              }
+#endif
           }
           break;
 
@@ -4683,6 +4751,77 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
       stm32_epout_interrupt(priv);
     }
 
+  /* DWC2 v5.00 buffer DMA bulk OUT completion poll.
+   *
+   * This core does NOT generate DOEPINT.XFRC or RXFLVL entries
+   * (OUTRECVD/OUTDONE) for bulk OUT transfers in buffer DMA mode.
+   * The DMA writes data to SRAM and decrements PKTCNT, but provides
+   * NO software notification.  Poll DOEPTSIZ for each active OUT
+   * endpoint: if PKTCNT reached 0, the transfer is complete.
+   */
+
+#ifdef CONFIG_STM32N6_OTG_DMA
+  {
+    int ep;
+
+    for (ep = 1; ep < STM32_NENDPOINTS; ep++)
+      {
+        struct stm32_ep_s *privep = &priv->epout[ep];
+
+        if (!privep->active || privep->isin)
+          {
+            continue;
+          }
+
+        uint32_t doeptsiz = stm32_getreg(STM32_OTG_DOEPTSIZ(ep));
+        uint32_t pktcnt = (doeptsiz & OTG_DOEPTSIZ_PKTCNT_MASK) >>
+                          OTG_DOEPTSIZ_PKTCNT_SHIFT;
+
+        if (pktcnt == 0)
+          {
+            /* Transfer complete — compute bytes received */
+
+            struct stm32_req_s *privreq = stm32_rqpeek(privep);
+            if (privreq != NULL)
+              {
+                uint32_t xfrsiz_remain =
+                  (doeptsiz & OTG_DOEPTSIZ_XFRSIZ_MASK) >>
+                  OTG_DOEPTSIZ_XFRSIZ_SHIFT;
+                uint32_t xfrsiz_orig =
+                  ((privreq->req.len - privreq->req.xfrd +
+                    privep->ep.maxpacket - 1) /
+                   privep->ep.maxpacket) * privep->ep.maxpacket;
+
+                uint32_t xfrd;
+                if (xfrsiz_remain <= xfrsiz_orig)
+                  {
+                    xfrd = xfrsiz_orig - xfrsiz_remain;
+                  }
+                else
+                  {
+                    /* XFRSIZ underflowed — use maxpacket as fallback */
+
+                    xfrd = privreq->req.len;
+                  }
+
+                if (xfrd > 0)
+                  {
+                    up_invalidate_dcache(
+                      (uintptr_t)(privreq->req.buf + privreq->req.xfrd),
+                      (uintptr_t)(privreq->req.buf + privreq->req.xfrd +
+                                  xfrd));
+                  }
+
+                privreq->req.xfrd += xfrd;
+              }
+
+            if (ep == 3) g_usb_ep0_cnt[6]++;
+            stm32_epout_complete(priv, privep);
+          }
+      }
+  }
+#endif
+
   /* IN endpoint interrupt — re-read GINTSTS because OEP processing
    * (SETUP dispatch → CLASS_SETUP → EP_SUBMIT) starts EP0 IN transfers
    * whose XFRC appears AFTER our snapshot.  Without this re-read, the
@@ -4951,15 +5090,18 @@ static int stm32_epout_configure(struct stm32_ep_s *privep,
   regval  = stm32_getreg(regaddr);
   if ((regval & OTG_DOEPCTL_USBAEP) == 0)
     {
-      if (regval & OTG_DOEPCTL_NAKSTS)
-        {
-          regval |= OTG_DOEPCTL_CNAK;
-        }
+      /* Do NOT write CNAK here — the endpoint must stay NAKing until
+       * a read request is armed in stm32_epout_request().  Writing CNAK
+       * before DOEPTSIZ/DOEPDMA are programmed causes the DWC2 to accept
+       * data into a garbage DMA address, corrupting memory and consuming
+       * rdreqs before they're submitted.
+       */
 
       regval &= ~(OTG_DOEPCTL_MPSIZ_MASK | OTG_DOEPCTL_EPTYP_MASK);
       regval |= mpsiz;
       regval |= (eptype << OTG_DOEPCTL_EPTYP_SHIFT);
-      regval |= (OTG_DOEPCTL_SD0PID | OTG_DOEPCTL_USBAEP);
+      regval |= (OTG_DOEPCTL_SD0PID | OTG_DOEPCTL_USBAEP |
+                 OTG_DOEPCTL_SNAK);
       stm32_putreg(regval, regaddr);
 
       /* Save the endpoint configuration */
