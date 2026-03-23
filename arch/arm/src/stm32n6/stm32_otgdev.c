@@ -835,6 +835,7 @@ static struct stm32_usbdev_s g_otghsdev;
 
 uint32_t g_usb_ep0_cnt[8];
 uint32_t g_usb_dma_dump[16]; /* First 64 bytes of first DMA transfer */
+static uint16_t g_epout_bcnt[STM32_NENDPOINTS]; /* BCNT from OUTRECVD */
 
 /* M55 Secure: DCIMVAC is unreliable (pitfall #32). Use DCCISW
  * (clean+invalidate by set/way) for USB DMA cache coherency.
@@ -2164,10 +2165,22 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
          * data (e.g. 'h' → 'd', 'e' → 'd').
          */
 
-        /* Pre-DMA: use DCCISW (set/way clean+invalidate) to flush
-         * dirty cache lines.  DCIMVAC is unreliable on M55 Secure.
+        /* Pre-DMA: zero the buffer to ensure all cache lines for
+         * this buffer are clean (contain zeros) and marked dirty.
+         * When the DMA writes to SRAM, the cache has matching
+         * clean lines.  DCCISW post-DMA then writes back zeros
+         * (same as SRAM) and invalidates, so the next CPU read
+         * fetches fresh DMA data.  This prevents stale dirty cache
+         * lines from overwriting DMA data during DCCISW writeback.
          */
 
+        /* Pre-DMA: clean+invalidate the buffer's cache lines.
+         * Write zeros first so any dirty lines contain zeros
+         * (matching what we want in SRAM).  Then DCCISW flushes
+         * and invalidates the entire cache.
+         */
+
+        memset(dest, 0, xfrsize);
         stm32_dcache_flush();
         stm32_putreg((uint32_t)(uintptr_t)dest,
                      STM32_OTG_DOEPDMA(privep->epphy));
@@ -4235,11 +4248,15 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
             bcnt = (regval & OTG_GRXSTSD_BCNT_MASK) >>
                     OTG_GRXSTSD_BCNT_SHIFT;
 #ifdef CONFIG_STM32N6_OTG_DMA
-            /* In descriptor DMA mode, OUT data was transferred directly
-             * to the DMA buffer by the DWC2 engine — NOT to the RxFIFO.
-             * Do NOT read from the FIFO here; the DOEPINT.XFRC handler
-             * will process the DMA buffer contents.
+            /* DMA mode: data was written to SRAM by DMA.
+             * Store BCNT for the PKTCNT poll to use (DOEPTSIZ
+             * XFRSIZ is unreliable on DWC2 v5.00).
              */
+
+            if (epphy < STM32_NENDPOINTS)
+              {
+                g_epout_bcnt[epphy] = bcnt;
+              }
 #else
             if (bcnt > 0)
               {
@@ -4846,32 +4863,31 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
                     privep->ep.maxpacket - 1) /
                    privep->ep.maxpacket) * privep->ep.maxpacket;
 
-                if (xfrsiz_remain < xfrsiz_orig)
+                /* Use BCNT from RXFLVL OUTRECVD (reliable) instead
+                 * of DOEPTSIZ XFRSIZ (garbage on DWC2 v5.00).
+                 */
+
+                xfrd = g_epout_bcnt[ep];
+                if (xfrd == 0)
                   {
-                    xfrd = xfrsiz_orig - xfrsiz_remain;
-                  }
-                else
-                  {
-                    /* XFRSIZ unchanged or garbage — PKTCNT reached 0
-                     * so data WAS received.  Assume maxpacket.
-                     */
+                    /* BCNT not captured — fallback to maxpacket */
 
                     xfrd = privep->ep.maxpacket;
-                    if (xfrd > privreq->req.len - privreq->req.xfrd)
-                      {
-                        xfrd = privreq->req.len - privreq->req.xfrd;
-                      }
                   }
 
-                if (xfrd > 0)
+                if (xfrd > privreq->req.len - privreq->req.xfrd)
                   {
-                    /* Post-DMA: clean+invalidate cache so CPU reads
-                     * fresh DMA data.  DCIMVAC is broken on M55
-                     * Secure, use DCCISW (set/way) instead.
-                     */
-
-                    stm32_dcache_flush();
+                    xfrd = privreq->req.len - privreq->req.xfrd;
                   }
+
+                g_epout_bcnt[ep] = 0;  /* Reset for next transfer */
+
+                /* Post-DMA: DSB to ensure DMA writes are committed
+                 * to SRAM, then DCCISW to force cache refetch.
+                 */
+
+                __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+                stm32_dcache_flush();
 
                 privreq->req.xfrd += xfrd;
 
@@ -4880,8 +4896,6 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
                     g_usb_ep0_cnt[6]++;
                     if (g_usb_ep0_cnt[6] == 1)
                       {
-                        /* Capture first 64 bytes of first transfer */
-
                         memcpy(g_usb_dma_dump, privreq->req.buf, 64);
                       }
                   }
@@ -5619,7 +5633,7 @@ static void *stm32_ep_allocbuffer(struct usbdev_ep_s *ep, unsigned bytes)
    * (DCIMVAC) doesn't corrupt adjacent allocations.
    */
 
-  return kmm_memalign(32, (bytes + 31) & ~31);
+  return kmm_memalign(64, (bytes + 63) & ~63);
 #else
   return kmm_malloc(bytes);
 #endif
