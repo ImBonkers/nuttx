@@ -250,6 +250,7 @@ static void    cdcuart_dmasend(FAR struct uart_dev_s *dev);
 #endif
 #ifndef CONFIG_CDCACM_DISABLE_RXBUF
 static void    cdcuart_dmareceive(FAR struct uart_dev_s *dev);
+static void    cdcuart_dmarxfree(FAR struct uart_dev_s *dev);
 #endif
 
 /****************************************************************************
@@ -305,7 +306,7 @@ static const struct uart_ops_s g_uartops =
 #else
   NULL,                  /* dmareceive */
 #endif
-  NULL,                  /* dmarxfree */
+  cdcuart_dmarxfree,     /* dmarxfree */
 #endif
 #ifdef CONFIG_SERIAL_TXDMA
   NULL,                  /* dmatxavail */
@@ -3142,6 +3143,26 @@ static void cdcuart_dmareceive(FAR struct uart_dev_s *dev)
     {
       sq_remfirst(&priv->rxpending);
       cdcacm_requeue_rdrequest(priv, rdcontainer);
+    }
+}
+
+/****************************************************************************
+ * Name: cdcuart_dmarxfree
+ *
+ * Description:
+ *   Notify CDC that the serial RX buffer has free space.  Called by the
+ *   serial layer after the application reads data, freeing buffer space
+ *   for pending USB OUT packets stuck in rxpending.
+ *
+ ****************************************************************************/
+
+static void cdcuart_dmarxfree(FAR struct uart_dev_s *dev)
+{
+  FAR struct cdcacm_dev_s *priv = (FAR struct cdcacm_dev_s *)dev->priv;
+
+  if (priv)
+    {
+      cdcacm_release_rxpending(priv);
     }
 }
 

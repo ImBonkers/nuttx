@@ -2580,7 +2580,7 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
   regval |= (OTG_GINT_IISOIXFR | OTG_GINT_IISOOXFR);
 #endif
 
-#ifdef CONFIG_USBDEV_SOFINTERRUPT
+#if defined(CONFIG_USBDEV_SOFINTERRUPT) || defined(CONFIG_STM32N6_OTG_DMA)
   regval |= OTG_GINT_SOF;
 #endif
 
@@ -4779,37 +4779,57 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
         if (pktcnt == 0)
           {
-            /* Transfer complete — compute bytes received */
+            /* Transfer complete — compute bytes received.
+             *
+             * DOEPTSIZ.XFRSIZ is unreliable in buffer DMA mode on
+             * this core. Add DSB to ensure register is settled, then
+             * re-read and compute.  If still garbage (underflowed),
+             * fall back to maxpacket.
+             */
 
             struct stm32_req_s *privreq = stm32_rqpeek(privep);
             if (privreq != NULL)
               {
-                uint32_t xfrsiz_remain =
+                uint32_t xfrsiz_remain;
+                uint32_t xfrsiz_orig;
+                uint32_t xfrd;
+
+                /* DSB + re-read to let hardware settle */
+
+                __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+                doeptsiz = stm32_getreg(STM32_OTG_DOEPTSIZ(ep));
+                xfrsiz_remain =
                   (doeptsiz & OTG_DOEPTSIZ_XFRSIZ_MASK) >>
                   OTG_DOEPTSIZ_XFRSIZ_SHIFT;
-                uint32_t xfrsiz_orig =
+                xfrsiz_orig =
                   ((privreq->req.len - privreq->req.xfrd +
                     privep->ep.maxpacket - 1) /
                    privep->ep.maxpacket) * privep->ep.maxpacket;
 
-                uint32_t xfrd;
                 if (xfrsiz_remain <= xfrsiz_orig)
                   {
                     xfrd = xfrsiz_orig - xfrsiz_remain;
                   }
                 else
                   {
-                    /* XFRSIZ underflowed — use maxpacket as fallback */
+                    /* XFRSIZ garbage — assume maxpacket received.
+                     * Cap to remaining request length.
+                     */
 
-                    xfrd = privreq->req.len;
+                    xfrd = privep->ep.maxpacket;
+                    if (xfrd > privreq->req.len - privreq->req.xfrd)
+                      {
+                        xfrd = privreq->req.len - privreq->req.xfrd;
+                      }
                   }
 
                 if (xfrd > 0)
                   {
                     up_invalidate_dcache(
-                      (uintptr_t)(privreq->req.buf + privreq->req.xfrd),
-                      (uintptr_t)(privreq->req.buf + privreq->req.xfrd +
-                                  xfrd));
+                      (uintptr_t)(privreq->req.buf +
+                                  privreq->req.xfrd),
+                      (uintptr_t)(privreq->req.buf +
+                                  privreq->req.xfrd + xfrd));
                   }
 
                 privreq->req.xfrd += xfrd;
@@ -4907,12 +4927,14 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
   /* Start of frame interrupt */
 
-#ifdef CONFIG_USBDEV_SOFINTERRUPT
+#if defined(CONFIG_USBDEV_SOFINTERRUPT) || defined(CONFIG_STM32N6_OTG_DMA)
   if ((regval & OTG_GINT_SOF) != 0)
     {
+#ifdef CONFIG_USBDEV_SOFINTERRUPT
       usbtrace(TRACE_INTDECODE(STM32_TRACEINTID_SOF),
               (uint16_t)regval);
       usbdev_sof_irq(&priv->usbdev, stm32_getframe(&priv->usbdev));
+#endif
       stm32_putreg(OTG_GINT_SOF, STM32_OTG_GINTSTS);
     }
 #endif
@@ -6728,7 +6750,7 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
   regval |= (OTG_GINT_IISOIXFR | OTG_GINT_IISOOXFR);
 #endif
 
-#ifdef CONFIG_USBDEV_SOFINTERRUPT
+#if defined(CONFIG_USBDEV_SOFINTERRUPT) || defined(CONFIG_STM32N6_OTG_DMA)
   regval |= OTG_GINT_SOF;
 #endif
 
