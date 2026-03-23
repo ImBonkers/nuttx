@@ -2163,9 +2163,11 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
          * data (e.g. 'h' → 'd', 'e' → 'd').
          */
 
-        up_invalidate_dcache((uintptr_t)dest,
-                             (uintptr_t)dest + xfrsize);
-        __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+        /* Pre-DMA: use DCCISW (set/way clean+invalidate) to flush
+         * dirty cache lines.  DCIMVAC is unreliable on M55 Secure.
+         */
+
+        stm32_dcache_flush();
         stm32_putreg((uint32_t)(uintptr_t)dest,
                      STM32_OTG_DOEPDMA(privep->epphy));
       }
@@ -4860,15 +4862,11 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
                       }
                   }
 
-                if (xfrd > 0)
-                  {
-                    up_invalidate_dcache(
-                      (uintptr_t)(privreq->req.buf +
-                                  privreq->req.xfrd),
-                      (uintptr_t)(privreq->req.buf +
-                                  privreq->req.xfrd + xfrd));
-                    __asm__ __volatile__ ("dsb 0xf" : : : "memory");
-                  }
+                /* Post-DMA: skip cache invalidation for now to
+                 * isolate whether DCIMVAC or wrong DMA address is
+                 * causing the crash.  DMA writes directly to SRAM,
+                 * so data may be stale in cache but readable.
+                 */
 
                 privreq->req.xfrd += xfrd;
 
