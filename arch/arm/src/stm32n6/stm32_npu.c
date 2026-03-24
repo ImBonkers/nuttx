@@ -60,8 +60,8 @@
 #include "stm32_aton.h"
 #include "ll_aton_NN_interface.h"
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
-#include "yoloxn192.h"
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
+#include "yolov8n192.h"
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
 #include "people_det.h"
 #else
@@ -74,22 +74,22 @@ extern int LL_ATON_Init(void);
 
 /* Forward declarations for generated model functions */
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
 
 extern const EpochBlock_ItemTypeDef *
-  LL_ATON_EpochBlockItems_yoloxn192(void);
+  LL_ATON_EpochBlockItems_yolov8n192(void);
 extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Input_Buffers_Info_yoloxn192(void);
-extern int LL_ATON_Set_User_Input_Buffer_yoloxn192(uint32_t num,
+  LL_ATON_Input_Buffers_Info_yolov8n192(void);
+extern int LL_ATON_Set_User_Input_Buffer_yolov8n192(uint32_t num,
                                                     void *buffer,
                                                     uint32_t size);
-extern int LL_ATON_Set_User_Output_Buffer_yoloxn192(uint32_t num,
+extern int LL_ATON_Set_User_Output_Buffer_yolov8n192(uint32_t num,
                                                      void *buffer,
                                                      uint32_t size);
 extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Output_Buffers_Info_yoloxn192(void);
-extern bool LL_ATON_EC_Network_Init_yoloxn192(void);
-extern bool LL_ATON_EC_Inference_Init_yoloxn192(void);
+  LL_ATON_Output_Buffers_Info_yolov8n192(void);
+extern bool LL_ATON_EC_Network_Init_yolov8n192(void);
+extern bool LL_ATON_EC_Inference_Init_yolov8n192(void);
 
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
 
@@ -123,16 +123,14 @@ extern bool LL_ATON_EC_Inference_Init_npu_test(void);
 
 /* Model-specific macros */
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
-#  define MODEL_IN_NUM          LL_ATON_YOLOXN192_IN_NUM
-#  define MODEL_OUT_NUM         LL_ATON_YOLOXN192_OUT_NUM
-#  define MODEL_IN_SIZE         LL_ATON_YOLOXN192_IN_1_SIZE_BYTES
-#  define MODEL_OUT_SIZE        (LL_ATON_YOLOXN192_OUT_1_SIZE_BYTES + \
-                                 LL_ATON_YOLOXN192_OUT_2_SIZE_BYTES + \
-                                 LL_ATON_YOLOXN192_OUT_3_SIZE_BYTES)
-#  define MODEL_IN_ALIGN        LL_ATON_YOLOXN192_IN_1_ALIGNMENT
-#  define MODEL_OUT_ALIGN       LL_ATON_YOLOXN192_OUT_1_ALIGNMENT
-#  define MODEL_NAME            "yoloxn192"
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
+#  define MODEL_IN_NUM          LL_ATON_YOLOV8N192_IN_NUM
+#  define MODEL_OUT_NUM         LL_ATON_YOLOV8N192_OUT_NUM
+#  define MODEL_IN_SIZE         LL_ATON_YOLOV8N192_IN_1_SIZE_BYTES
+#  define MODEL_OUT_SIZE        LL_ATON_YOLOV8N192_OUT_1_SIZE_BYTES
+#  define MODEL_IN_ALIGN        LL_ATON_YOLOV8N192_IN_1_ALIGNMENT
+#  define MODEL_OUT_ALIGN       LL_ATON_YOLOV8N192_OUT_1_ALIGNMENT
+#  define MODEL_NAME            "yolov8n192"
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
 #  define MODEL_IN_NUM          LL_ATON_PEOPLE_DET_IN_NUM
 #  define MODEL_OUT_NUM         LL_ATON_PEOPLE_DET_OUT_NUM
@@ -282,7 +280,7 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
       return -EBUSY;
     }
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
 
   /* YOLOX-Nano: user-allocated input in SRAM1 (not activation pool).
    * NPU CACHEAXI caches AXISRAM reads — user buffer in SRAM1
@@ -290,23 +288,19 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
    */
 
   {
-    static uint8_t yolox_in[110592]  aligned_data(32);
-    static uint8_t yolox_out0[3456]  aligned_data(32);
-    static uint8_t yolox_out1[13824] aligned_data(32);
-    static uint8_t yolox_out2[864]   aligned_data(32);
+    static uint8_t v8_in[110592]   aligned_data(32);
+    static uint8_t v8_out[15120]   aligned_data(32);
 
-    LL_ATON_Set_User_Input_Buffer_yoloxn192(0, yolox_in, 110592);
-    LL_ATON_Set_User_Output_Buffer_yoloxn192(0, yolox_out0, 3456);
-    LL_ATON_Set_User_Output_Buffer_yoloxn192(1, yolox_out1, 13824);
-    LL_ATON_Set_User_Output_Buffer_yoloxn192(2, yolox_out2, 864);
+    LL_ATON_Set_User_Input_Buffer_yolov8n192(0, v8_in, 110592);
+    LL_ATON_Set_User_Output_Buffer_yolov8n192(0, v8_out, 15120);
   }
 
-  priv->epoch_blocks = LL_ATON_EpochBlockItems_yoloxn192();
-  priv->input_bufs   = LL_ATON_Input_Buffers_Info_yoloxn192();
-  priv->output_bufs  = LL_ATON_Output_Buffers_Info_yoloxn192();
+  priv->epoch_blocks = LL_ATON_EpochBlockItems_yolov8n192();
+  priv->input_bufs   = LL_ATON_Input_Buffers_Info_yolov8n192();
+  priv->output_bufs  = LL_ATON_Output_Buffers_Info_yolov8n192();
 
-  LL_ATON_EC_Network_Init_yoloxn192();
-  LL_ATON_EC_Inference_Init_yoloxn192();
+  LL_ATON_EC_Network_Init_yolov8n192();
+  LL_ATON_EC_Inference_Init_yolov8n192();
 
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
 
@@ -456,23 +450,12 @@ static int stm32_npu_get_output(FAR struct aie_lowerhalf_s *lower, int id,
       return -EINVAL;
     }
 
-#if defined(CONFIG_STM32N6_NPU_MODEL_YOLOXN192)
-  /* YOLOX has 3 output heads — concatenate into user buffer */
+#if defined(CONFIG_STM32N6_NPU_MODEL_YOLOV8N192)
+  src  = LL_Buffer_addr_start(&priv->output_bufs[0]);
+  size = MODEL_OUT_SIZE;
 
-  {
-    uint8_t *dst = (uint8_t *)user_buf;
-    int i;
-
-    up_flush_dcache_all();
-    for (i = 0; i < MODEL_OUT_NUM; i++)
-      {
-        src  = LL_Buffer_addr_start(&priv->output_bufs[i]);
-        size = LL_Buffer_addr_end(&priv->output_bufs[i]) -
-               LL_Buffer_addr_start(&priv->output_bufs[i]);
-        memcpy(dst, src, size);
-        dst += size;
-      }
-  }
+  up_flush_dcache_all();
+  memcpy(user_buf, src, size);
 #else
   src  = LL_Buffer_addr_start(&priv->output_bufs[0]);
   size = MODEL_OUT_SIZE;
@@ -530,7 +513,7 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
           putreg32(0x01 | 0x3f0f0000,
                    STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
           /* Full ATON reset between inferences — the LL_ATON runtime
            * tracks epoch state internally.  Without LL_ATON_Init(),
            * STRENG/ARITH/SWITCH units retain stale config from the
@@ -538,7 +521,7 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
            */
 
           LL_ATON_Init();
-          LL_ATON_EC_Inference_Init_yoloxn192();
+          LL_ATON_EC_Inference_Init_yolov8n192();
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
           LL_ATON_EC_Inference_Init_people_det();
 #endif
@@ -560,7 +543,7 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                   ebs[i].start_epoch_block(&ebs[i]);
 
                   /* Debug: dump STRENG 6 ADDR after first epoch start */
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
                   if (i == 0)
                     {
                       static int dbg;
@@ -674,7 +657,7 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
 
               ebs[i].end_epoch_block(&ebs[i]);
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
               /* Print activation pool checksum after every epoch (first run only) */
               {
                 static bool traced;
@@ -716,15 +699,15 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
           info->input_size_bytes  = MODEL_IN_SIZE;
           info->output_size_bytes = MODEL_OUT_SIZE;
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
           info->input_shape[0]  = 1;
           info->input_shape[1]  = 192;
           info->input_shape[2]  = 192;
           info->input_shape[3]  = 3;
-          info->output_shape[0] = MODEL_OUT_NUM;
-          info->output_shape[1] = 0;
-          info->output_shape[2] = 0;
-          info->output_shape[3] = 6;
+          info->output_shape[0] = 1;
+          info->output_shape[1] = 5;
+          info->output_shape[2] = 756;
+          info->output_shape[3] = 0;
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
           info->input_shape[0]  = 1;
           info->input_shape[1]  = 3;

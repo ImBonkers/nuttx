@@ -11,8 +11,8 @@
 
 #include <nuttx/config.h>
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
-#include "yoloxn192.c"
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
+#include "yolov8n192.c"
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
 #include "people_det.c"
 #else
