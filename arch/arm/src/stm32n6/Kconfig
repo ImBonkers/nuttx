@@ -433,6 +433,14 @@ config STM32N6_NPU_MODEL_PEOPLE_DET
 		If disabled, the small test model (32x32x3 int8, 4 HW epochs)
 		is used instead.
 
+config STM32N6_NPU_MODEL_YOLOXN192
+	bool "YOLOX-Nano 192x192 people detection model"
+	default n
+	depends on STM32N6_NPU
+	---help---
+		ST YOLOX-Nano d033 w025 192x192 int8 people detection.
+		120 epochs (115 HW + 5 SW). Requires SW fallback runtime.
+
 endmenu
 
 menu "RTC Configuration"
