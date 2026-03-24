@@ -772,7 +772,7 @@ static void        stm32_ep_freereq(struct usbdev_ep_s *ep,
 
 #ifdef CONFIG_USBDEV_DMA
 static void       *stm32_ep_allocbuffer(struct usbdev_ep_s *ep,
-                     unsigned bytes);
+                     uint16_t bytes);
 static void        stm32_ep_freebuffer(struct usbdev_ep_s *ep,
                      void *buf);
 #endif
@@ -838,10 +838,12 @@ uint32_t g_usb_ep0_cnt[8];
 uint32_t g_usb_dma_dump[16]; /* First 64 bytes of first DMA transfer */
 static uint16_t g_epout_bcnt[STM32_NENDPOINTS]; /* BCNT from OUTRECVD */
 
-/* M55 Secure: DCIMVAC is unreliable (pitfall #32). Use DCCISW
- * (clean+invalidate by set/way) for USB DMA cache coherency.
+/* M55 Secure: MVA cache ops (DCIMVAC/DCCIMVAC) are unreliable (pitfall
+ * #32).  Use DCCISW (clean+invalidate entire D-cache by set/way) for
+ * USB DMA cache coherency.  Expensive but guaranteed to work.
  */
 
+#ifdef CONFIG_STM32N6_OTG_DMA
 static void stm32_dcache_flush(void)
 {
   uint32_t ccsidr = getreg32(0xe000ed80);
@@ -863,6 +865,7 @@ static void stm32_dcache_flush(void)
   while (sets--);
   __asm__ __volatile__ ("dsb 0xf" : : : "memory");
 }
+#endif
 
 /* Index: 0=SETUP_RXFLVL, 1=SETUP_DONE, 2=SETUP_DOEPINT,
  *        3=EP0IN_XFRC, 4=EP0IN_ABORT, 5=EP0OUT_REARM,
@@ -1241,11 +1244,10 @@ static void stm32_ep0out_ctrlsetup(struct stm32_usbdev_s *priv)
 
 #ifdef CONFIG_STM32N6_OTG_DMA
   /* Buffer DMA: point DOEPDMA directly to the SETUP receive buffer.
-   * Clean+invalidate cache so DMA writes land in clean SRAM.
+   * DCCISW flushes D-cache so DMA writes land in clean SRAM.
    */
 
-  up_clean_dcache((uintptr_t)priv->dma->setup_buf,
-                  (uintptr_t)priv->dma->setup_buf + 32);
+  stm32_dcache_flush();
   stm32_putreg((uint32_t)(uintptr_t)priv->dma->setup_buf,
                STM32_OTG_DOEPDMA(0));
 #endif
@@ -1454,15 +1456,10 @@ static void stm32_epin_transfer(struct stm32_ep_s *privep,
       }
 
     /* Buffer DMA: point DIEPDMA directly to the data buffer.
-     * Clean cache so DMA engine reads current data from SRAM.
+     * DCCISW flushes D-cache so DMA reads current data.
      */
 
-    if (nbytes > 0)
-      {
-        up_clean_dcache((uintptr_t)dmabuf, (uintptr_t)dmabuf + nbytes);
-      }
-
-    __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+    stm32_dcache_flush();
     stm32_putreg((uint32_t)(uintptr_t)dmabuf,
                  STM32_OTG_DIEPDMA(epno));
   }
@@ -2160,34 +2157,19 @@ static void stm32_epout_request(struct stm32_usbdev_s *priv,
       {
         uint8_t *dest = privreq->req.buf + privreq->req.xfrd;
 
-        /* Invalidate cache for the DMA receive region.  Without this,
-         * dirty cache lines from previous buffer use get written back
-         * by the cache controller AFTER DMA writes, corrupting received
-         * data (e.g. 'h' → 'd', 'e' → 'd').
+        /* Pre-DMA: DCCISW flushes ALL dirty cache lines to SRAM and
+         * invalidates the entire D-cache.  This ensures no stale dirty
+         * lines can be written back over DMA data later.
+         *
+         * Do NOT memset the buffer — that creates new dirty cache lines
+         * that can survive DCCISW on M55 and overwrite DMA data at
+         * cache line boundaries (causes 4-byte shift at byte 32).
          */
 
-        /* Pre-DMA: zero the buffer to ensure all cache lines for
-         * this buffer are clean (contain zeros) and marked dirty.
-         * When the DMA writes to SRAM, the cache has matching
-         * clean lines.  DCCISW post-DMA then writes back zeros
-         * (same as SRAM) and invalidates, so the next CPU read
-         * fetches fresh DMA data.  This prevents stale dirty cache
-         * lines from overwriting DMA data during DCCISW writeback.
-         */
-
-        /* Pre-DMA: clean+invalidate the buffer's cache lines.
-         * Write zeros first so any dirty lines contain zeros
-         * (matching what we want in SRAM).  Then DCCISW flushes
-         * and invalidates the entire cache.
-         */
-
-        /* Pre-DMA: memset + DCCISW to ensure no stale dirty cache
-         * lines can overwrite DMA data during post-DMA writeback.
-         */
-
-        /* Buffer is in non-cacheable MPU region — no cache ops */
+        stm32_dcache_flush();
         stm32_putreg((uint32_t)(uintptr_t)dest,
                      STM32_OTG_DOEPDMA(privep->epphy));
+
       }
 #endif
 
@@ -2664,6 +2646,7 @@ static void stm32_usbreset(struct stm32_usbdev_s *priv)
   }
 
   regval |= OTG_GAHBCFG_DMAEN | (3 << OTG_GAHBCFG_HBSTLEN_SHIFT);
+
 #endif
 
   stm32_putreg(regval, STM32_OTG_GAHBCFG);
@@ -3343,10 +3326,9 @@ static inline void stm32_epout(struct stm32_usbdev_s *priv, uint8_t epno)
                 uint16_t readlen =
                   MIN(xfrd, CONFIG_USBDEV_SETUP_MAXDATASIZE);
 
-                up_invalidate_dcache(
-                  (uintptr_t)priv->dma->setup_buf,
-                  (uintptr_t)priv->dma->setup_buf + 32);
-                __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+                /* DCCISW: flush D-cache so CPU reads fresh DMA data */
+
+                stm32_dcache_flush();
                 memcpy(priv->ep0data, priv->dma->setup_buf, readlen);
                 priv->ep0datlen = readlen;
 
@@ -3620,13 +3602,10 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                       privep->ep.maxpacket;
 
                     xfrd = xfrsiz_orig - xfrsiz_remain;
-                    if (xfrd > 0)
-                      {
-                        up_invalidate_dcache(
-                          (uintptr_t)(privreq->req.buf + privreq->req.xfrd),
-                          (uintptr_t)(privreq->req.buf + privreq->req.xfrd + xfrd));
-                      }
 
+                    /* DCCISW: flush D-cache so CPU reads fresh DMA data */
+
+                    stm32_dcache_flush();
                     privreq->req.xfrd += xfrd;
                   }
               }
@@ -3686,10 +3665,9 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                 {
                   uint16_t datlen;
 
-                  up_invalidate_dcache(
-                    (uintptr_t)priv->dma->setup_buf,
-                    (uintptr_t)priv->dma->setup_buf + 32);
-                  __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+                  /* DCCISW: flush D-cache so CPU reads fresh DMA data */
+
+                  stm32_dcache_flush();
                   memcpy(&priv->ctrlreq, priv->dma->setup_buf,
                          USB_SIZEOF_CTRLREQ);
                   usb_dbg_log('S', priv->ep0state,
@@ -3730,9 +3708,9 @@ static inline void stm32_epout_interrupt(struct stm32_usbdev_s *priv)
                         (3 << OTG_DOEPTSIZ0_STUPCNT_SHIFT);
                       stm32_putreg(tsiz, STM32_OTG_DOEPTSIZ(0));
 
-                      up_clean_dcache(
-                        (uintptr_t)priv->dma->setup_buf,
-                        (uintptr_t)priv->dma->setup_buf + 32);
+                      /* DCCISW: flush D-cache before arming DMA */
+
+                      stm32_dcache_flush();
                       stm32_putreg(
                         (uint32_t)(uintptr_t)priv->dma->setup_buf,
                         STM32_OTG_DOEPDMA(0));
@@ -4204,7 +4182,7 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
   int bcnt;
   int epphy;
 
-  /* Get the status from the top of the FIFO */
+  /* Get the status from the top of the FIFO (pop) */
 
   regval = stm32_getreg(STM32_OTG_GRXSTSP);
 
@@ -4335,15 +4313,9 @@ static inline void stm32_rxinterrupt(struct stm32_usbdev_s *priv)
                           }
                       }
 
-                    if (xfrd > 0)
-                      {
-                        up_invalidate_dcache(
-                          (uintptr_t)(privreq->req.buf +
-                                      privreq->req.xfrd),
-                          (uintptr_t)(privreq->req.buf +
-                                      privreq->req.xfrd + xfrd));
-                      }
+                    /* DCCISW: flush D-cache so CPU reads fresh DMA data */
 
+                    stm32_dcache_flush();
                     privreq->req.xfrd += xfrd;
                     g_usb_ep0_cnt[6]++;  /* EP3 completion counter */
                   }
@@ -4754,9 +4726,9 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
     }
 #endif
 
-  /* RxFIFO non-empty interrupt.  Required in both PIO and buffer DMA
-   * mode — see comment at GINTMSK setup for why DMA still needs this.
-   * RXFLVL is level-triggered — drain ALL entries to prevent re-fire.
+  /* RxFIFO non-empty interrupt.  In DMA mode, stm32_rxinterrupt
+   * peeks first and skips non-EP0 OUTRECVD entries to avoid
+   * desynchronizing the DMA engine's FIFO read pointer.
    */
 
   while ((stm32_getreg(STM32_OTG_GINTSTS) & OTG_GINT_RXFLVL) != 0)
@@ -4868,7 +4840,7 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
                    privep->ep.maxpacket) * privep->ep.maxpacket;
 
                 /* Use BCNT from RXFLVL OUTRECVD (reliable) instead
-                 * of DOEPTSIZ XFRSIZ (garbage on DWC2 v5.00).
+                 * of DOEPTSIZ XFRSIZ (may be unreliable on some DWC2).
                  */
 
                 xfrd = g_epout_bcnt[ep];
@@ -4886,9 +4858,9 @@ static int stm32_usbinterrupt(int irq, void *context, void *arg)
 
                 g_epout_bcnt[ep] = 0;  /* Reset for next transfer */
 
-                /* Non-cacheable region — just DSB for DMA ordering */
+                /* DCCISW: flush D-cache so CPU reads fresh DMA data */
 
-                __asm__ __volatile__ ("dsb 0xf" : : : "memory");
+                stm32_dcache_flush();
 
                 privreq->req.xfrd += xfrd;
 
@@ -5623,26 +5595,18 @@ static void stm32_ep_freereq(struct usbdev_ep_s *ep,
  ****************************************************************************/
 
 #ifdef CONFIG_USBDEV_DMA
-static void *stm32_ep_allocbuffer(struct usbdev_ep_s *ep, unsigned bytes)
+static void *stm32_ep_allocbuffer(struct usbdev_ep_s *ep, uint16_t bytes)
 {
   usbtrace(TRACE_EPALLOCBUFFER, ((struct stm32_ep_s *)ep)->epphy);
 
 #ifdef CONFIG_USBDEV_DMAMEMORY
   return usbdev_dma_alloc(bytes);
 #elif defined(CONFIG_STM32N6_OTG_DMA)
-  /* Cache-line align DMA buffers (32 bytes) so up_invalidate_dcache
-   * (DCIMVAC) doesn't corrupt adjacent allocations.
+  /* Cache-line align DMA buffers (32 bytes) so DCCISW writeback
+   * doesn't corrupt adjacent allocations.
    */
 
-  /* Allocate from a static non-cacheable DMA pool.
-   * The pool is placed in BSS with 64-byte alignment.
-   * The MPU Region 1 makes this address range non-cacheable,
-   * eliminating all cache coherency issues with DMA.
-   */
-
-  {
-  return kmm_memalign(64, (bytes + 63) & ~63);
-  }
+  return kmm_memalign(64, (bytes + 63) & ~63u);
 #else
   return kmm_malloc(bytes);
 #endif
@@ -5665,9 +5629,7 @@ static void stm32_ep_freebuffer(struct usbdev_ep_s *ep, void *buf)
 #ifdef CONFIG_USBDEV_DMAMEMORY
   usbdev_dma_free(buf);
 #elif defined(CONFIG_STM32N6_OTG_DMA)
-  /* Buffers are from static .usbdma pool — don't free */
-
-  UNUSED(buf);
+  kmm_free(buf);
 #else
   kmm_free(buf);
 #endif
@@ -6817,13 +6779,10 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
 
   /* Enable the interrupts in the INTMSK.
    *
-   * RXFLVL is required even in buffer DMA mode on this DWC2 v5.00.
-   * The DWC2 core queues status entries (SETUPRECVD, SETUPDONE, etc.)
-   * in the RxFIFO status queue regardless of DMA mode.  Per the DWC2
-   * databook, DOEPINT.SETUP only asserts AFTER software pops the
-   * SETUPDONE entry by reading GRXSTSP.  Without RXFLVL, nothing
-   * triggers the pop, and SETUP packets are never dispatched.
-   * The RXFLVL handler in DMA mode pops status entries but skips
+   * RXFLVL is required even in buffer DMA mode.  The DWC2 core
+   * queues SETUPRECVD/SETUPDONE status entries in the RxFIFO, and
+   * DOEPINT.SETUP only asserts after SETUPDONE is popped via GRXSTSP.
+   * The RXFLVL handler pops status entries; in DMA mode it skips
    * FIFO data reads (DMA handles data transfer to SRAM directly).
    */
 
@@ -6897,9 +6856,9 @@ static void stm32_hwinitialize(struct stm32_usbdev_s *priv)
     stm32_putreg(gdfifocfg, STM32_OTG_BASE + 0x005c);
   }
 
-  /* HBSTLEN=INCR4, DMAEN=1 */
+  /* HBSTLEN=INCR8, DMAEN=1. */
 
-  regval |= OTG_GAHBCFG_DMAEN | (3 << OTG_GAHBCFG_HBSTLEN_SHIFT);
+  regval |= OTG_GAHBCFG_DMAEN | (5 << OTG_GAHBCFG_HBSTLEN_SHIFT);
 #endif
 
   stm32_putreg(regval, STM32_OTG_GAHBCFG);
@@ -6925,8 +6884,8 @@ void arm_usbinitialize(void)
 
 #ifdef CONFIG_STM32N6_OTG_DMA
   /* DMA buffers live in Write-Back cacheable SRAM (MPU Region 0).
-   * Cache coherency is handled via up_clean_dcache/up_invalidate_dcache.
-   * DMA buffers are 32-byte aligned (cache line size) so MVA ops work.
+   * Cache coherency handled via DCCISW (set/way clean+invalidate).
+   * MVA ops (DCIMVAC/DCCIMVAC) are unreliable on M55 Secure.
    */
 #endif
 

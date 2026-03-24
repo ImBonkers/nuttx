@@ -147,6 +147,7 @@ struct stm32_npu_s
   const LL_Buffer_InfoTypeDef  *input_bufs;
   const LL_Buffer_InfoTypeDef  *output_bufs;
   bool initialized;
+  bool cacheaxi_held;
 #ifdef CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET
   uint8_t *io_input;            /* User-allocated input buffer */
   uint8_t *io_output;           /* User-allocated output buffer */
@@ -235,11 +236,6 @@ static int streng_wait_yield(uint32_t mask)
           return -ETIMEDOUT;
         }
 
-      /* Yield CPU to other tasks via sched_yield().  This lets NuttX
-       * run ready tasks without the minimum-tick overhead of usleep.
-       * If no other task is ready, returns immediately (tight poll).
-       */
-
       sched_yield();
     }
 }
@@ -322,6 +318,13 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
 static int stm32_npu_deinit(FAR struct aie_lowerhalf_s *lower, int id)
 {
   FAR struct stm32_npu_s *priv = (FAR struct stm32_npu_s *)lower;
+
+  if (priv->cacheaxi_held)
+    {
+      cacheaxi_disable();
+      stm32_xspi_mmap_unlock();
+      priv->cacheaxi_held = false;
+    }
 
   priv->epoch_blocks = NULL;
   priv->input_bufs   = NULL;
@@ -419,16 +422,22 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
         {
           int ret;
 
-          ret = stm32_xspi_mmap_lock();
-          if (ret < 0)
+          if (!priv->cacheaxi_held)
             {
-              return ret;
-            }
+              ret = stm32_xspi_mmap_lock();
+              if (ret < 0)
+                {
+                  return ret;
+                }
 
-          putreg32(0x02, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
-          while (getreg32(STM32_CACHEAXI_BASE + ATON_CACHEAXI_SR) & 1);
-          putreg32(0x01 | 0x3f0f0000,
-                   STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+              putreg32(0x02,
+                       STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+              while (getreg32(STM32_CACHEAXI_BASE +
+                              ATON_CACHEAXI_SR) & 1);
+              putreg32(0x01 | 0x3f0f0000,
+                       STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+              priv->cacheaxi_held = true;
+            }
 
 #ifdef CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET
           /* Re-init inference state for each run */
@@ -438,10 +447,6 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
 
           ebs = priv->epoch_blocks;
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET
-          syslog(LOG_INFO, "NPU: in=%p out=%p\n",
-                 priv->io_input, priv->io_output);
-#endif
 
           for (i = 0; ; i++)
             {
@@ -457,11 +462,9 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                   ebs[i].start_epoch_block(&ebs[i]);
                 }
 
-              /* Per-epoch timing */
-              {
-                clock_t ep_start = clock_systime_ticks();
-
               /* Only wait if there are STRENGs to wait on */
+
+              {
 
               if (ebs[i].wait_mask != 0)
                 {
@@ -552,15 +555,12 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                 }
 
               ebs[i].end_epoch_block(&ebs[i]);
-
-                syslog(LOG_INFO, "NPU: ep%d %ldus\n", i,
-                       (long)TICK2USEC(clock_systime_ticks() -
-                                       ep_start));
               }
             }
 
-          cacheaxi_disable();
-          stm32_xspi_mmap_unlock();
+          /* Keep CACHEAXI + XSPI mmap held for back-to-back
+           * inferences.  Released on device close or unload.
+           */
 
           return OK;
         }
