@@ -80,6 +80,12 @@ extern const EpochBlock_ItemTypeDef *
   LL_ATON_EpochBlockItems_yoloxn192(void);
 extern const LL_Buffer_InfoTypeDef *
   LL_ATON_Input_Buffers_Info_yoloxn192(void);
+extern int LL_ATON_Set_User_Input_Buffer_yoloxn192(uint32_t num,
+                                                    void *buffer,
+                                                    uint32_t size);
+extern int LL_ATON_Set_User_Output_Buffer_yoloxn192(uint32_t num,
+                                                     void *buffer,
+                                                     uint32_t size);
 extern const LL_Buffer_InfoTypeDef *
   LL_ATON_Output_Buffers_Info_yoloxn192(void);
 extern bool LL_ATON_EC_Network_Init_yoloxn192(void);
@@ -278,9 +284,22 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
 
 #ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
 
-  /* YOLOX-Nano: all I/O in activation pool (no user buffers).
-   * SW epochs use fixed cache ops (set/way, not broken MVA).
+  /* YOLOX-Nano: user-allocated input in SRAM1 (not activation pool).
+   * NPU CACHEAXI caches AXISRAM reads — user buffer in SRAM1
+   * avoids stale cached input between inferences.
    */
+
+  {
+    static uint8_t yolox_in[110592]  aligned_data(32);
+    static uint8_t yolox_out0[3456]  aligned_data(32);
+    static uint8_t yolox_out1[13824] aligned_data(32);
+    static uint8_t yolox_out2[864]   aligned_data(32);
+
+    LL_ATON_Set_User_Input_Buffer_yoloxn192(0, yolox_in, 110592);
+    LL_ATON_Set_User_Output_Buffer_yoloxn192(0, yolox_out0, 3456);
+    LL_ATON_Set_User_Output_Buffer_yoloxn192(1, yolox_out1, 13824);
+    LL_ATON_Set_User_Output_Buffer_yoloxn192(2, yolox_out2, 864);
+  }
 
   priv->epoch_blocks = LL_ATON_EpochBlockItems_yoloxn192();
   priv->input_bufs   = LL_ATON_Input_Buffers_Info_yoloxn192();
@@ -404,6 +423,16 @@ static int stm32_npu_feed_input(FAR struct aie_lowerhalf_s *lower, int id,
   dst  = LL_Buffer_addr_start(&priv->input_bufs[0]);
   size = MODEL_IN_SIZE;
 
+  {
+    static int fc;
+    if (fc < 3)
+      {
+        syslog(LOG_ERR, "FEED dst=%p size=%lu\n",
+               dst, (unsigned long)size);
+        fc++;
+      }
+  }
+
   memcpy(dst, user_buf, size);
   up_flush_dcache_all();
 
@@ -485,16 +514,30 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                   return ret;
                 }
 
-              putreg32(0x02,
-                       STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
-              while (getreg32(STM32_CACHEAXI_BASE +
-                              ATON_CACHEAXI_SR) & 1);
-              putreg32(0x01 | 0x3f0f0000,
-                       STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
               priv->cacheaxi_held = true;
             }
 
+          /* Invalidate + re-enable CACHEAXI before EVERY inference.
+           * CACHEAXI caches NPU reads from SRAM (0x342e0000 input).
+           * Without invalidation, the NPU reads stale cached input
+           * from the first inference on all subsequent runs.
+           */
+
+          putreg32(0x02,
+                   STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+          while (getreg32(STM32_CACHEAXI_BASE +
+                          ATON_CACHEAXI_SR) & 1);
+          putreg32(0x01 | 0x3f0f0000,
+                   STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+
 #ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+          /* Full ATON reset between inferences — the LL_ATON runtime
+           * tracks epoch state internally.  Without LL_ATON_Init(),
+           * STRENG/ARITH/SWITCH units retain stale config from the
+           * previous inference's 120 epochs.
+           */
+
+          LL_ATON_Init();
           LL_ATON_EC_Inference_Init_yoloxn192();
 #elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
           LL_ATON_EC_Inference_Init_people_det();
@@ -515,6 +558,26 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
               if (ebs[i].start_epoch_block != NULL)
                 {
                   ebs[i].start_epoch_block(&ebs[i]);
+
+                  /* Debug: dump STRENG 6 ADDR after first epoch start */
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+                  if (i == 0)
+                    {
+                      static int dbg;
+                      if (dbg < 3)
+                        {
+                          /* STRENG 6 reads input. Base=NPU+0x5000+0x1000*6 */
+                          uint32_t se6_addr = getreg32(0x580EB008);
+                          uint32_t se7_addr = getreg32(0x580EC008);
+                          uint32_t se3_addr = getreg32(0x580E8008);
+                          syslog(LOG_ERR, "EP%d SE6=%08lx SE7=%08lx SE3=%08lx\n",
+                                 i, (unsigned long)se6_addr,
+                                 (unsigned long)se7_addr,
+                                 (unsigned long)se3_addr);
+                          dbg++;
+                        }
+                    }
+#endif
                 }
 
               /* Only wait if there are STRENGs to wait on */
@@ -610,6 +673,29 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                 }
 
               ebs[i].end_epoch_block(&ebs[i]);
+
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOXN192
+              /* Print activation pool checksum after every epoch (first run only) */
+              {
+                static bool traced;
+                if (!traced)
+                  {
+                    volatile uint8_t *ap = (volatile uint8_t *)0x342e0000;
+                    uint32_t cs = 0;
+                    int k;
+                    up_flush_dcache_all();
+                    for (k = 0; k < 1024; k++)
+                      {
+                        cs += ap[k];
+                      }
+                    syslog(LOG_ERR, "E%d=%lu\n", i, (unsigned long)cs);
+                    if (ebs[i].flags & EpochBlock_Flags_last_eb)
+                      {
+                        traced = true;
+                      }
+                  }
+              }
+#endif
               }
             }
 
