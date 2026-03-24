@@ -542,25 +542,6 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                 {
                   ebs[i].start_epoch_block(&ebs[i]);
 
-                  /* Debug: dump STRENG 6 ADDR after first epoch start */
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
-                  if (i == 0)
-                    {
-                      static int dbg;
-                      if (dbg < 3)
-                        {
-                          /* STRENG 6 reads input. Base=NPU+0x5000+0x1000*6 */
-                          uint32_t se6_addr = getreg32(0x580EB008);
-                          uint32_t se7_addr = getreg32(0x580EC008);
-                          uint32_t se3_addr = getreg32(0x580E8008);
-                          syslog(LOG_ERR, "EP%d SE6=%08lx SE7=%08lx SE3=%08lx\n",
-                                 i, (unsigned long)se6_addr,
-                                 (unsigned long)se7_addr,
-                                 (unsigned long)se3_addr);
-                          dbg++;
-                        }
-                    }
-#endif
                 }
 
               /* Only wait if there are STRENGs to wait on */
@@ -657,28 +638,6 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
 
               ebs[i].end_epoch_block(&ebs[i]);
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
-              /* Print activation pool checksum after every epoch (first run only) */
-              {
-                static bool traced;
-                if (!traced)
-                  {
-                    volatile uint8_t *ap = (volatile uint8_t *)0x342e0000;
-                    uint32_t cs = 0;
-                    int k;
-                    up_flush_dcache_all();
-                    for (k = 0; k < 1024; k++)
-                      {
-                        cs += ap[k];
-                      }
-                    syslog(LOG_ERR, "E%d=%lu\n", i, (unsigned long)cs);
-                    if (ebs[i].flags & EpochBlock_Flags_last_eb)
-                      {
-                        traced = true;
-                      }
-                  }
-              }
-#endif
               }
             }
 
