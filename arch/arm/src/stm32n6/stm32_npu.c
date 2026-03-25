@@ -26,11 +26,9 @@
  * Wraps native ATON epoch execution into NuttX's ai_engine upper/lower-half
  * framework, exposing /dev/npu0 with ioctl interface.
  *
- * Epoch wait strategy: yield-poll.  EN_BUFBL cannot be used because it
- * stalls the STRENG pipeline (it's a per-block synchronization mechanism
- * for CPU-in-the-loop SW epochs, not a passive completion notification).
- * Instead, we poll STRENG CTRL.RUNNING with nxsig_usleep() between polls
- * so the CPU yields to other NuttX tasks during inference.
+ * Uses ST's LL_ATON_RT_RunEpochBlock API in polling mode (RT_MODE=1).
+ * This handles HW epochs, SW epochs (DequantizeLinear, Resize), and
+ * Hybrid epochs (Concat, Slice, Transpose) with internal sub-epoch chains.
  ****************************************************************************/
 
 /****************************************************************************
@@ -62,64 +60,19 @@
 
 #ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
 #include "yolov8n192.h"
-#elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
-#include "people_det.h"
 #else
 #include "npu_test.h"
 #endif
 
-/* ST LL_ATON runtime init */
+/* ST LL_ATON runtime */
+
+#include "ll_aton_rt_user_api.h"
 
 extern int LL_ATON_Init(void);
+extern void LL_ATON_RT_RuntimeInit(void);
+extern void LL_ATON_RT_Reset_Network(NN_Instance_TypeDef *nn_instance);
 
-/* Forward declarations for generated model functions */
-
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
-
-extern const EpochBlock_ItemTypeDef *
-  LL_ATON_EpochBlockItems_yolov8n192(void);
-extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Input_Buffers_Info_yolov8n192(void);
-extern int LL_ATON_Set_User_Input_Buffer_yolov8n192(uint32_t num,
-                                                    void *buffer,
-                                                    uint32_t size);
-extern int LL_ATON_Set_User_Output_Buffer_yolov8n192(uint32_t num,
-                                                     void *buffer,
-                                                     uint32_t size);
-extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Output_Buffers_Info_yolov8n192(void);
-extern bool LL_ATON_EC_Network_Init_yolov8n192(void);
-extern bool LL_ATON_EC_Inference_Init_yolov8n192(void);
-
-#elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
-
-extern const EpochBlock_ItemTypeDef *
-  LL_ATON_EpochBlockItems_people_det(void);
-extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Input_Buffers_Info_people_det(void);
-extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Output_Buffers_Info_people_det(void);
-extern bool LL_ATON_EC_Network_Init_people_det(void);
-extern bool LL_ATON_EC_Inference_Init_people_det(void);
-extern int LL_ATON_Set_User_Input_Buffer_people_det(uint32_t num,
-                                                     void *buffer,
-                                                     uint32_t size);
-extern int LL_ATON_Set_User_Output_Buffer_people_det(uint32_t num,
-                                                      void *buffer,
-                                                      uint32_t size);
-
-#else /* npu_test model */
-
-extern const EpochBlock_ItemTypeDef *
-  LL_ATON_EpochBlockItems_npu_test(void);
-extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Input_Buffers_Info_npu_test(void);
-extern const LL_Buffer_InfoTypeDef *
-  LL_ATON_Output_Buffers_Info_npu_test(void);
-extern bool LL_ATON_EC_Network_Init_npu_test(void);
-extern bool LL_ATON_EC_Inference_Init_npu_test(void);
-
-#endif
+/* Forward declarations handled by LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE */
 
 /* Model-specific macros */
 
@@ -131,14 +84,6 @@ extern bool LL_ATON_EC_Inference_Init_npu_test(void);
 #  define MODEL_IN_ALIGN        LL_ATON_YOLOV8N192_IN_1_ALIGNMENT
 #  define MODEL_OUT_ALIGN       LL_ATON_YOLOV8N192_OUT_1_ALIGNMENT
 #  define MODEL_NAME            "yolov8n192"
-#elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
-#  define MODEL_IN_NUM          LL_ATON_PEOPLE_DET_IN_NUM
-#  define MODEL_OUT_NUM         LL_ATON_PEOPLE_DET_OUT_NUM
-#  define MODEL_IN_SIZE         LL_ATON_PEOPLE_DET_IN_1_SIZE_BYTES
-#  define MODEL_OUT_SIZE        LL_ATON_PEOPLE_DET_OUT_1_SIZE_BYTES
-#  define MODEL_IN_ALIGN        LL_ATON_PEOPLE_DET_IN_1_ALIGNMENT
-#  define MODEL_OUT_ALIGN       LL_ATON_PEOPLE_DET_OUT_1_ALIGNMENT
-#  define MODEL_NAME            "people_det"
 #else
 #  define MODEL_IN_NUM          LL_ATON_NPU_TEST_IN_NUM
 #  define MODEL_OUT_NUM         LL_ATON_NPU_TEST_OUT_NUM
@@ -173,12 +118,9 @@ struct stm32_npu_s
   const EpochBlock_ItemTypeDef *epoch_blocks;
   const LL_Buffer_InfoTypeDef  *input_bufs;
   const LL_Buffer_InfoTypeDef  *output_bufs;
+  NN_Instance_TypeDef *nn_instance;
   bool initialized;
   bool cacheaxi_held;
-#ifdef CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET
-  uint8_t *io_input;            /* User-allocated input buffer */
-  uint8_t *io_output;           /* User-allocated output buffer */
-#endif
 };
 
 /****************************************************************************
@@ -210,6 +152,14 @@ static const struct aie_ops_s g_npu_ops =
 
 static struct stm32_npu_s g_npu_dev;
 
+/* NN interface + instance for the LL_ATON runtime API */
+
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
+LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(yolov8n192);
+#else
+LL_ATON_DECLARE_NAMED_NN_INSTANCE_AND_INTERFACE(npu_test);
+#endif
+
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
@@ -223,48 +173,6 @@ static void cacheaxi_disable(void)
   while (getreg32(STM32_CACHEAXI_BASE + ATON_CACHEAXI_SR) & 0x09);
   putreg32(0x12, STM32_CACHEAXI_BASE + ATON_CACHEAXI_FCR);
   putreg32(0, STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
-}
-
-/****************************************************************************
- * Name: streng_wait_yield
- *
- * Description:
- *   Wait for STRENGs in mask to complete, yielding CPU between polls.
- *   Returns 0 on success, -ETIMEDOUT on timeout.
- *
- ****************************************************************************/
-
-static int streng_wait_yield(uint32_t mask)
-{
-  clock_t deadline = clock_systime_ticks() +
-                     MSEC2TICK(NPU_EPOCH_TIMEOUT_MS);
-  int i;
-
-  for (; ; )
-    {
-      uint32_t running = 0;
-
-      for (i = 0; i < ATON_STRENG_NUM; i++)
-        {
-          if (mask & (1u << i))
-            {
-              running |= getreg32(ATON_STRENG_BASE(i) + ATON_STRENG_CTRL)
-                         & STRENG_CTRL_RUNNING;
-            }
-        }
-
-      if (!running)
-        {
-          return 0;
-        }
-
-      if ((int32_t)(clock_systime_ticks() - deadline) >= 0)
-        {
-          return -ETIMEDOUT;
-        }
-
-      sched_yield();
-    }
 }
 
 /****************************************************************************
@@ -282,10 +190,7 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
 
 #ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
 
-  /* YOLOX-Nano: user-allocated input in SRAM1 (not activation pool).
-   * NPU CACHEAXI caches AXISRAM reads — user buffer in SRAM1
-   * avoids stale cached input between inferences.
-   */
+  /* User-allocated I/O buffers in BSS (not activation pool) */
 
   {
     static uint8_t v8_in[110592]   aligned_data(32);
@@ -295,66 +200,34 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
     LL_ATON_Set_User_Output_Buffer_yolov8n192(0, v8_out, 15120);
   }
 
+  priv->nn_instance = &NN_Instance_yolov8n192;
   priv->epoch_blocks = LL_ATON_EpochBlockItems_yolov8n192();
   priv->input_bufs   = LL_ATON_Input_Buffers_Info_yolov8n192();
   priv->output_bufs  = LL_ATON_Output_Buffers_Info_yolov8n192();
 
-  LL_ATON_EC_Network_Init_yolov8n192();
-  LL_ATON_EC_Inference_Init_yolov8n192();
-
-#elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
-
-  /* Allocate user I/O buffers (people_det uses user-allocated I/O) */
-
-  priv->io_input = kmm_memalign(MODEL_IN_ALIGN, MODEL_IN_SIZE);
-  if (priv->io_input == NULL)
-    {
-      syslog(LOG_ERR, "NPU: failed to alloc input (%d bytes)\n",
-             MODEL_IN_SIZE);
-      return -ENOMEM;
-    }
-
-  priv->io_output = kmm_memalign(MODEL_OUT_ALIGN, MODEL_OUT_SIZE);
-  if (priv->io_output == NULL)
-    {
-      syslog(LOG_ERR, "NPU: failed to alloc output (%d bytes)\n",
-             MODEL_OUT_SIZE);
-      kmm_free(priv->io_input);
-      priv->io_input = NULL;
-      return -ENOMEM;
-    }
-
-  /* Register buffers with the model */
-
-  LL_ATON_Set_User_Input_Buffer_people_det(0, priv->io_input,
-                                           MODEL_IN_SIZE);
-  LL_ATON_Set_User_Output_Buffer_people_det(0, priv->io_output,
-                                            MODEL_OUT_SIZE);
-
-  priv->epoch_blocks = LL_ATON_EpochBlockItems_people_det();
-  priv->input_bufs   = LL_ATON_Input_Buffers_Info_people_det();
-  priv->output_bufs  = LL_ATON_Output_Buffers_Info_people_det();
-
-  LL_ATON_EC_Network_Init_people_det();
-  LL_ATON_EC_Inference_Init_people_det();
-
 #else /* npu_test */
 
+  priv->nn_instance = &NN_Instance_npu_test;
   priv->epoch_blocks = LL_ATON_EpochBlockItems_npu_test();
   priv->input_bufs   = LL_ATON_Input_Buffers_Info_npu_test();
   priv->output_bufs  = LL_ATON_Output_Buffers_Info_npu_test();
 
-  LL_ATON_EC_Network_Init_npu_test();
-  LL_ATON_EC_Inference_Init_npu_test();
-
 #endif
 
   if (priv->epoch_blocks == NULL || priv->input_bufs == NULL ||
-      priv->output_bufs == NULL)
+      priv->output_bufs == NULL || priv->nn_instance == NULL)
     {
       syslog(LOG_ERR, "NPU: failed to get model tables\n");
       return -EIO;
     }
+
+  /* Initialize the LL_ATON runtime and network instance.
+   * RuntimeInit sets up the global scheduler.
+   * Init_Network sets up exec_state (epoch block list, etc.).
+   */
+
+  LL_ATON_RT_RuntimeInit();
+  LL_ATON_RT_Init_Network(priv->nn_instance);
 
   priv->initialized = true;
   return 1;
@@ -380,20 +253,6 @@ static int stm32_npu_deinit(FAR struct aie_lowerhalf_s *lower, int id)
   priv->output_bufs  = NULL;
   priv->initialized  = false;
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET
-  if (priv->io_input != NULL)
-    {
-      kmm_free(priv->io_input);
-      priv->io_input = NULL;
-    }
-
-  if (priv->io_output != NULL)
-    {
-      kmm_free(priv->io_output);
-      priv->io_output = NULL;
-    }
-#endif
-
   return OK;
 }
 
@@ -416,16 +275,6 @@ static int stm32_npu_feed_input(FAR struct aie_lowerhalf_s *lower, int id,
 
   dst  = LL_Buffer_addr_start(&priv->input_bufs[0]);
   size = MODEL_IN_SIZE;
-
-  {
-    static int fc;
-    if (fc < 3)
-      {
-        syslog(LOG_ERR, "FEED dst=%p size=%lu\n",
-               dst, (unsigned long)size);
-        fc++;
-      }
-  }
 
   memcpy(dst, user_buf, size);
   up_flush_dcache_all();
@@ -451,11 +300,24 @@ static int stm32_npu_get_output(FAR struct aie_lowerhalf_s *lower, int id,
     }
 
 #if defined(CONFIG_STM32N6_NPU_MODEL_YOLOV8N192)
-  src  = LL_Buffer_addr_start(&priv->output_bufs[0]);
-  size = MODEL_OUT_SIZE;
+  /* Read raw int8 Concat output [756, 5] from activation pool.
+   * Dequantize on host (scale=0.00513, zp=-128).
+   * Prepend 4-byte sync marker for USB desync detection.
+   */
 
-  up_flush_dcache_all();
-  memcpy(user_buf, src, size);
+  {
+    static uint32_t frame_seq;
+    uint32_t marker = 0xAA550000 | (frame_seq & 0xFFFF);
+
+    src  = (uint8_t *)(0x342e0000 + 15120);
+    size = 3780;
+
+    up_flush_dcache_all();
+    memcpy(user_buf, &marker, 4);
+    memcpy((uint8_t *)user_buf + 4, src, size);
+
+    frame_seq++;
+  }
 #else
   src  = LL_Buffer_addr_start(&priv->output_bufs[0]);
   size = MODEL_OUT_SIZE;
@@ -475,8 +337,6 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                              int cmd, unsigned long arg)
 {
   FAR struct stm32_npu_s *priv = (FAR struct stm32_npu_s *)lower;
-  const EpochBlock_ItemTypeDef *ebs;
-  int i;
 
   if (!priv->initialized)
     {
@@ -500,150 +360,44 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
               priv->cacheaxi_held = true;
             }
 
-          /* Invalidate + re-enable CACHEAXI before EVERY inference.
-           * CACHEAXI caches NPU reads from SRAM (0x342e0000 input).
-           * Without invalidation, the NPU reads stale cached input
-           * from the first inference on all subsequent runs.
+          /* CACHEAXI: enable then invalidate for weight reads.
+           * Must enable first (bit 0), THEN invalidate (bit 1).
+           * Full invalidate ensures reads go to XSPI2 on first
+           * access, populating cache with fresh data.
            */
 
-          putreg32(0x02,
+          putreg32(0x01 | 0x3f0f0000,
+                   STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+          putreg32(0x03 | 0x3f0f0000,
                    STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
           while (getreg32(STM32_CACHEAXI_BASE +
                           ATON_CACHEAXI_SR) & 1);
-          putreg32(0x01 | 0x3f0f0000,
-                   STM32_CACHEAXI_BASE + ATON_CACHEAXI_CR1);
+          putreg32(0x12, STM32_CACHEAXI_BASE + ATON_CACHEAXI_FCR);
 
-#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
-          /* Full ATON reset between inferences — the LL_ATON runtime
-           * tracks epoch state internally.  Without LL_ATON_Init(),
-           * STRENG/ARITH/SWITCH units retain stale config from the
-           * previous inference's 120 epochs.
+          /* Run inference using LL_ATON runtime API.
+           * RunEpochBlock is non-blocking and cooperative:
+           *   NO_WFE = SW step done, call again immediately
+           *   WFE    = HW epoch started, yield to scheduler
+           *   DONE   = inference complete
+           *
+           * This properly handles HW, SW, AND Hybrid epochs
+           * (Concat, Slice, Transpose with internal sub-epochs)
+           * that our previous manual epoch loop could not handle.
            */
 
-          LL_ATON_Init();
-          LL_ATON_EC_Inference_Init_yolov8n192();
-#elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
-          LL_ATON_EC_Inference_Init_people_det();
-#endif
+          {
+            LL_ATON_RT_RetValues_t rv;
 
-          ebs = priv->epoch_blocks;
-
-
-          for (i = 0; ; i++)
-            {
-              if (ebs[i].flags & EpochBlock_Flags_last_eb)
-                {
-                  break;
-                }
-
-              /* SW epochs have NULL start_epoch_block */
-
-              if (ebs[i].start_epoch_block != NULL)
-                {
-                  ebs[i].start_epoch_block(&ebs[i]);
-
-                }
-
-              /* Only wait if there are STRENGs to wait on */
-
+            do
               {
-
-              if (ebs[i].wait_mask != 0)
-                {
-                  ret = streng_wait_yield(ebs[i].wait_mask);
-                  if (ret < 0)
-                    {
-                      int j;
-                      syslog(LOG_ERR,
-                             "NPU: epoch %d timeout, mask=0x%08lx\n",
-                             i, (unsigned long)ebs[i].wait_mask);
-                      for (j = 0; j < ATON_STRENG_NUM; j++)
-                        {
-                          uint32_t ctrl = getreg32(
-                              ATON_STRENG_BASE(j) + ATON_STRENG_CTRL);
-                          uint32_t addr = getreg32(
-                              ATON_STRENG_BASE(j) + ATON_STRENG_ADDR);
-                          uint32_t evt = getreg32(
-                              ATON_STRENG_BASE(j) + ATON_STRENG_EVENT);
-                          uint32_t limen = getreg32(
-                              ATON_STRENG_BASE(j) + ATON_STRENG_LIMITEN);
-                          uint32_t limit = getreg32(
-                              ATON_STRENG_BASE(j) + 0x34);
-                          if (ctrl != 0)
-                            {
-                              uint32_t irq = getreg32(
-                                  ATON_STRENG_BASE(j) + 0x3c);
-                              syslog(LOG_ERR,
-                                     "  SE%d: CTRL=%08lx ADDR=%08lx "
-                                     "LIMEN=%08lx LIM=%lu IRQ=%08lx\n",
-                                     j, (unsigned long)ctrl,
-                                     (unsigned long)addr,
-                                     (unsigned long)limen,
-                                     (unsigned long)limit,
-                                     (unsigned long)irq);
-                            }
-                        }
-
-                      /* Dump ARITH, CONVACC, ACTIV, POOL CTRL regs */
-
-                      for (j = 0; j < ATON_ARITH_NUM; j++)
-                        {
-                          uint32_t c = getreg32(
-                              ATON_ARITH_BASE(j) + 0x00);
-                          if (c != 0)
-                            {
-                              syslog(LOG_ERR, "  AR%d: CTRL=%08lx\n",
-                                     j, (unsigned long)c);
-                            }
-                        }
-
-                      for (j = 0; j < ATON_CONVACC_NUM; j++)
-                        {
-                          uint32_t c = getreg32(
-                              ATON_CONVACC_BASE(j) + 0x00);
-                          if (c != 0)
-                            {
-                              syslog(LOG_ERR, "  CA%d: CTRL=%08lx\n",
-                                     j, (unsigned long)c);
-                            }
-                        }
-
-                      for (j = 0; j < ATON_ACTIV_NUM; j++)
-                        {
-                          uint32_t c = getreg32(
-                              ATON_ACTIV_BASE(j) + 0x00);
-                          if (c != 0)
-                            {
-                              syslog(LOG_ERR, "  AV%d: CTRL=%08lx\n",
-                                     j, (unsigned long)c);
-                            }
-                        }
-
-                      for (j = 0; j < ATON_POOL_NUM; j++)
-                        {
-                          uint32_t c = getreg32(
-                              ATON_POOL_BASE(j) + 0x00);
-                          if (c != 0)
-                            {
-                              syslog(LOG_ERR, "  PL%d: CTRL=%08lx\n",
-                                     j, (unsigned long)c);
-                            }
-                        }
-
-                      cacheaxi_disable();
-                      stm32_xspi_mmap_unlock();
-                      return ret;
-                    }
-                }
-
-              ebs[i].end_epoch_block(&ebs[i]);
-
+                rv = LL_ATON_RT_RunEpochBlock(priv->nn_instance);
               }
-            }
+            while (rv != LL_ATON_RT_DONE);
 
-          /* Keep CACHEAXI + XSPI mmap held for back-to-back
-           * inferences.  Released on device close or unload.
-           */
+            /* Reset network state for next inference */
+
+            LL_ATON_RT_Reset_Network(priv->nn_instance);
+          }
 
           return OK;
         }
@@ -656,7 +410,11 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
           info->n_inputs          = MODEL_IN_NUM;
           info->n_outputs         = MODEL_OUT_NUM;
           info->input_size_bytes  = MODEL_IN_SIZE;
+#ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
+          info->output_size_bytes = 3784;  /* 4B sync + int8 [756,5] */
+#else
           info->output_size_bytes = MODEL_OUT_SIZE;
+#endif
 
 #ifdef CONFIG_STM32N6_NPU_MODEL_YOLOV8N192
           info->input_shape[0]  = 1;
@@ -667,15 +425,6 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
           info->output_shape[1] = 5;
           info->output_shape[2] = 756;
           info->output_shape[3] = 0;
-#elif defined(CONFIG_STM32N6_NPU_MODEL_PEOPLE_DET)
-          info->input_shape[0]  = 1;
-          info->input_shape[1]  = 3;
-          info->input_shape[2]  = 224;
-          info->input_shape[3]  = 224;
-          info->output_shape[0] = 1;
-          info->output_shape[1] = 7;
-          info->output_shape[2] = 7;
-          info->output_shape[3] = 30;
 #else
           info->input_shape[0]  = 1;
           info->input_shape[1]  = 3;
