@@ -67,6 +67,7 @@
 /* ST LL_ATON runtime */
 
 #include "ll_aton_rt_user_api.h"
+#include "ll_aton_osal_user_impl.h"
 
 extern int LL_ATON_Init(void);
 extern void LL_ATON_RT_RuntimeInit(void);
@@ -227,6 +228,14 @@ static int stm32_npu_init(FAR struct aie_lowerhalf_s *lower, uintptr_t model)
    */
 
   LL_ATON_RT_RuntimeInit();
+
+  /* RuntimeInit sets INTCTRL AND-mask to 0xFFFFFFFF (block all).
+   * With USE_IRQ_OR_MASK, SetWaitMask only modifies OR-mask.
+   * Clear AND-mask so OR-mask controls interrupt routing.
+   */
+
+  *(volatile uint32_t *)(0x580E1000 + 0x24) = 0;
+
   LL_ATON_RT_Init_Network(priv->nn_instance);
 
   priv->initialized = true;
@@ -374,15 +383,16 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
                           ATON_CACHEAXI_SR) & 1);
           putreg32(0x12, STM32_CACHEAXI_BASE + ATON_CACHEAXI_FCR);
 
-          /* Run inference using LL_ATON runtime API.
-           * RunEpochBlock is non-blocking and cooperative:
-           *   NO_WFE = SW step done, call again immediately
-           *   WFE    = HW epoch started, yield to scheduler
+          /* Run inference using LL_ATON runtime API (ASYNC mode).
+           * RunEpochBlock returns:
+           *   NO_WFE = call again immediately (SW step done)
+           *   WFE    = HW epoch running, call OSAL_WFE (sem_wait)
            *   DONE   = inference complete
            *
-           * This properly handles HW, SW, AND Hybrid epochs
-           * (Concat, Slice, Transpose with internal sub-epochs)
-           * that our previous manual epoch loop could not handle.
+           * In ASYNC mode, WFE blocks the calling task on a semaphore.
+           * The NPU IRQ handler posts the semaphore when the epoch
+           * completes, waking this task. Other NuttX tasks run while
+           * we wait.
            */
 
           {
@@ -391,6 +401,10 @@ static int stm32_npu_control(FAR struct aie_lowerhalf_s *lower, int id,
             do
               {
                 rv = LL_ATON_RT_RunEpochBlock(priv->nn_instance);
+                if (rv == LL_ATON_RT_WFE)
+                  {
+                    LL_ATON_OSAL_WFE();
+                  }
               }
             while (rv != LL_ATON_RT_DONE);
 
