@@ -36,6 +36,37 @@ config ARCH_CHIP_STM32N657X0
 
 endchoice
 
+choice
+	prompt "STM32N6 CPU frequency profile"
+	default STM32N6_CPUFREQ_200MHZ
+	---help---
+		Selects a validated CPU/bus frequency plan.  Each profile pins
+		STM32N6_PLL1_IC1_DIV (and, in future profiles, PLL1 M/N in
+		board.h) to a configuration that is consistent with VOS
+		scaling, flash wait states and bus limits.
+
+		Adding a new profile is an additive change: declare it here,
+		extend the STM32N6_PLL1_IC1_DIV and STM32N6_CPUCLK_FREQUENCY
+		derivations below, and (if the VCO frequency changes) update
+		the PLL1_M/PLL1_N defines in board.h.
+
+config STM32N6_CPUFREQ_200MHZ
+	bool "200 MHz (VOS SCALE1, no overdrive)"
+	---help---
+		PLL1 VCO = HSI/M * N = 64/4 * 50 = 800 MHz.
+		IC1 div = 4  =>  CPU  = 200 MHz.
+		HPRE  /2     =>  HCLK = 100 MHz.
+
+endchoice
+
+config STM32N6_PLL1_IC1_DIV
+	int
+	default 4 if STM32N6_CPUFREQ_200MHZ
+
+config STM32N6_CPUCLK_FREQUENCY
+	int
+	default 200000000 if STM32N6_CPUFREQ_200MHZ
+
 menu "STM32N6 Peripheral Selection"
 
 config STM32N6_USART1
