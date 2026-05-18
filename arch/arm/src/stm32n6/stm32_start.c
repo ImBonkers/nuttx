@@ -234,11 +234,11 @@ void __start_c(void)
   (void)getreg32(STM32_SYSCFG_VDDCCCR);
 
 #ifdef CONFIG_STM32N6_USART1
-  /* Route USART1's kernel clock to HSI so the BRR computation is
-   * independent of any later SYSCLK changes.
-   */
+  /* Route USART1's kernel clock per STM32N6_USART1_CLKSRC_* in Kconfig. */
 
+#  if defined(CONFIG_STM32N6_USART1_CLKSRC_HSI)
   putreg32(RCC_CCIPR13_USART1SEL_HSI, STM32_RCC_CCIPR13);
+#  endif
 #endif
 
   stm32_lowsetup();

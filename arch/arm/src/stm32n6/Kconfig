@@ -135,6 +135,31 @@ config USART1_UNCONFIG_TX_ON_CLOSE
 
 endif # USART1_SERIALDRIVER
 
+if STM32N6_USART1
+
+choice
+	prompt "USART1 kernel clock source"
+	default STM32N6_USART1_CLKSRC_HSI
+	---help---
+		Selects the USART1 kernel-clock source mux
+		(RCC_CCIPR13.USART1SEL).  Only HSI is currently validated.
+
+		Adding a new source is an additive change: declare a new bool
+		here, define the corresponding RCC_CCIPR13_USART1SEL_* constant
+		in hardware/stm32n6xxx_rcc.h if missing, and extend the
+		per-source frequency selection in stm32_lowputc.c and
+		stm32_serial.c.
+
+config STM32N6_USART1_CLKSRC_HSI
+	bool "HSI (64 MHz)"
+	---help---
+		Drive USART1 from the HSI oscillator.  Gives a BRR value that
+		is independent of any later SYSCLK / PCLK change.
+
+endchoice
+
+endif # STM32N6_USART1
+
 endmenu
 
 endif # ARCH_CHIP_STM32N6
